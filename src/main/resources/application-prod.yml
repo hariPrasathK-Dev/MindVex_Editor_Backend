@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+  
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+jwt:
+  secret: ${JWT_SECRET}
+
+cors:
+  allowed-origins: ${CORS_ORIGINS}
+
+logging:
+  level:
+    root: INFO
+    ai.mindvex: INFO
+    org.springframework.security: INFO
