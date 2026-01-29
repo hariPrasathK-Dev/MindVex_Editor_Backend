@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 @Slf4j
@@ -23,10 +24,10 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
     public OAuth2AuthenticationSuccessHandler(
             JwtService jwtService,
             HttpCookieOAuth2AuthorizationRequestRepository authorizationRequestRepository,
-            @Value("${app.oauth2.authorized-redirect-uris}") List<String> authorizedRedirectUris) {
+            @Value("${app.oauth2.authorized-redirect-uris:http://localhost:5173/auth/callback}") String[] authorizedRedirectUris) {
         this.jwtService = jwtService;
         this.authorizationRequestRepository = authorizationRequestRepository;
-        this.authorizedRedirectUris = authorizedRedirectUris;
+        this.authorizedRedirectUris = Arrays.asList(authorizedRedirectUris);
     }
 
     @Override
@@ -53,7 +54,7 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
             throw new IllegalArgumentException("Unauthorized Redirect URI");
         }
 
-        String targetUrl = redirectUri != null ? redirectUri : getDefaultTargetUrl();
+        String targetUrl = redirectUri != null ? redirectUri : "http://localhost:5173/auth/callback";
 
         // Get user from authentication
         CustomOAuth2User oauth2User = (CustomOAuth2User) authentication.getPrincipal();
@@ -71,7 +72,7 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
     }
 
     private boolean isAuthorizedRedirectUri(String uri) {
-        return java.util.Arrays.stream(authorizedRedirectUris.toArray(new String[0]))
+        return authorizedRedirectUris.stream()
                 .anyMatch(authorizedUri -> uri.startsWith(authorizedUri));
     }
 
