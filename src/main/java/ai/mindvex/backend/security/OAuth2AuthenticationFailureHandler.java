@@ -25,7 +25,7 @@ public class OAuth2AuthenticationFailureHandler extends SimpleUrlAuthenticationF
         String targetUrl = getRedirectUri(request);
 
         if (targetUrl == null || targetUrl.isBlank()) {
-            targetUrl = "http://localhost:5173"; // Default fallback
+            targetUrl = "https://mindvex-editor.pages.dev"; // Default fallback
         }
 
         targetUrl = UriComponentsBuilder.fromUriString(targetUrl)

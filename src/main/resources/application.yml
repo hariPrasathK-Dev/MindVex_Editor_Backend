@@ -84,7 +84,7 @@ app:
   oauth2:
     authorized-redirect-uris:
       - http://localhost:5173/auth/callback
-      - https://c0c9a716.mindvex-editor.pages.dev/auth/callback
+      - https://mindvex-editor.pages.dev/auth/callback
 
 # Logging
 logging:

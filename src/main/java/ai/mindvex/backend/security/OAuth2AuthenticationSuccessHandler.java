@@ -54,7 +54,7 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
             throw new IllegalArgumentException("Unauthorized Redirect URI");
         }
 
-        String targetUrl = redirectUri != null ? redirectUri : "http://localhost:5173/auth/callback";
+        String targetUrl = redirectUri != null ? redirectUri : "https://mindvex-editor.pages.dev/auth/callback";
 
         // Get user from authentication
         CustomOAuth2User oauth2User = (CustomOAuth2User) authentication.getPrincipal();
