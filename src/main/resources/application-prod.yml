@@ -23,12 +23,31 @@ spring:
   # Disable Flyway for now - we're using Hibernate ddl-auto=update
   flyway:
     enabled: false
+  
+  # Email Configuration for OTP
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 10000
+          timeout: 10000
+          writetimeout: 10000
 
 jwt:
   secret: ${JWT_SECRET}
 
 cors:
-  allowed-origins: ${CORS_ORIGINS}
+  allowed-origins:
+    - https://mindvex-editor.pages.dev
+    - https://*.pages.dev
+    - https://mindvex.ai
 
 logging:
   level:
