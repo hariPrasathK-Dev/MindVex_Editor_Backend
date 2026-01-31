@@ -286,6 +286,7 @@ public class WatsonxService {
             }
         }
 
+        return WatsonxChatResponse.builder()
                 .id((String) runResponse.get("id"))
                 .agentId(agentType)
                 .response(responseText)
