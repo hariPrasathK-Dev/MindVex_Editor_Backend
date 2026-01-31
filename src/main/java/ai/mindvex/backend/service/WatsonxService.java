@@ -206,8 +206,8 @@ public class WatsonxService {
 
         return WatsonxChatResponse.builder()
                 .agentId(agentType)
-                .message(responseText)
-                .status("completed")
+                .response(responseText)
+                .success(true)
                 .toolCalls(new ArrayList<>())
                 .metadata(Map.of(
                         "thread_id", threadId != null ? threadId : "",
