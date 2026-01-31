@@ -85,17 +85,22 @@ public class WatsonxService {
 
             String userMessage = buildUserMessage(request);
 
-            /* ✅ FIXED REQUEST BODY (THIS IS THE KEY CHANGE) */
             Map<String, Object> runRequest = Map.of(
-                    "input", Map.of(
-                            "messages", List.of(
-                                    Map.of(
-                                            "role", "user",
-                                            "content", userMessage
-                                    )
-                            )
+    "input", Map.of(
+        "messages", List.of(
+            Map.of(
+                "role", "user",
+                "content", List.of(
+                    Map.of(
+                        "type", "text",
+                        "text", userMessage
                     )
-            );
+                )
+            )
+        )
+    )
+);
+
 
             String apiPath = "/api/v1/agents/" + agentId
                + "/runs?environment_id=" + config.getAgentEnvironmentId();
