@@ -195,7 +195,8 @@ public class WatsonxService {
     /**
      * Poll for agent run completion.
      */
-    private WatsonxChatResponse pollForCompletion(String agentId, String runId, String agentType, String token) {
+    private WatsonxChatResponse pollForCompletion(String agentId, String runId, String threadId, String agentType,
+            String token) {
         log.info("Polling for agent run completion: runId={}", runId);
 
         for (int attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
@@ -218,7 +219,7 @@ public class WatsonxService {
                 log.debug("Poll attempt {}: status={}", attempt + 1, status);
 
                 if ("completed".equalsIgnoreCase(status)) {
-                    return extractAgentResponse(statusResponse, agentType);
+                    return extractAgentResponse(statusResponse, agentType, threadId);
                 } else if ("failed".equalsIgnoreCase(status)) {
                     String error = (String) statusResponse.getOrDefault("error", "Agent run failed");
                     return WatsonxChatResponse.error(agentType, error);
@@ -242,7 +243,8 @@ public class WatsonxService {
     /**
      * Extract agent response from the run result.
      */
-    private WatsonxChatResponse extractAgentResponse(Map<String, Object> runResponse, String agentType) {
+    private WatsonxChatResponse extractAgentResponse(Map<String, Object> runResponse, String agentType,
+            String threadId) {
         String responseText = "";
         List<WatsonxChatResponse.ToolCall> toolCalls = new ArrayList<>();
 
@@ -284,13 +286,13 @@ public class WatsonxService {
             }
         }
 
-        return WatsonxChatResponse.builder()
                 .id((String) runResponse.get("id"))
                 .agentId(agentType)
                 .response(responseText)
                 .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
                 .success(true)
                 .timestamp(LocalDateTime.now())
+                .metadata(Map.of("thread_id", threadId != null ? threadId : ""))
                 .build();
     }
 
