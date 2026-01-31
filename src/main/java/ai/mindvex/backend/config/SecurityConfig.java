@@ -62,8 +62,8 @@ public class SecurityConfig {
                                                                 "/swagger-ui/**",
                                                                 "/api-docs/**",
                                                                 "/actuator/**",
-                                                                "/api/watsonx/tools/**" // Allow watsonx agent tool
-                                                                                        // callbacks
+                                                                "/api/ai/**", // AI agent endpoints
+                                                                "/api/watsonx/**" // watsonx management endpoints
                                                 ).permitAll()
                                                 .anyRequest().authenticated())
                                 .sessionManagement(session -> session
