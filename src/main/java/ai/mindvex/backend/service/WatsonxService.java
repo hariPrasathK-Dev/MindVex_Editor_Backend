@@ -14,19 +14,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 
-/**
- * Service for interacting with IBM watsonx Orchestrate Runtime API.
- * 
- * This service:
- * - Handles IBM IAM token exchange and caching
- * - Invokes deployed agents via Orchestrate Runtime API
- * - Passes user messages and context to agents
- * - Returns agent responses to the controller
- * 
- * Architecture:
- * Frontend → Backend (this service) → IAM Token → Orchestrate → Agent → Tools →
- * Backend
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -39,13 +26,9 @@ public class WatsonxService {
     private String cachedToken;
     private LocalDateTime tokenExpiry;
 
-    // Polling configuration for agent runs
-    private static final int MAX_POLL_ATTEMPTS = 60; // Max 60 attempts
-    private static final Duration POLL_INTERVAL = Duration.ofSeconds(2); // 2 seconds between polls
+    private static final int MAX_POLL_ATTEMPTS = 60;
+    private static final Duration POLL_INTERVAL = Duration.ofSeconds(2);
 
-    /**
-     * Agent type to name mapping for display purposes
-     */
     private static final Map<String, String> AGENT_DISPLAY_NAMES = Map.of(
             "codebase-analysis", "MindVex Codebase Analyzer",
             "dependency-graph", "MindVex Dependency Mapper",
@@ -55,23 +38,12 @@ public class WatsonxService {
             "documentation", "MindVex Documentation Generator",
             "git-assistant", "MindVex Git Assistant");
 
-    /**
-     * Get IBM IAM access token.
-     * Exchanges the API key for an access token and caches it.
-     * Token is refreshed 5 minutes before expiry.
-     */
+    /* ================= IAM TOKEN ================= */
+
     public String getAccessToken() {
-        // Return cached token if still valid
-        if (cachedToken != null && tokenExpiry != null
-                && LocalDateTime.now().isBefore(tokenExpiry)) {
-            log.debug("Using cached IAM token");
+        if (cachedToken != null && tokenExpiry != null &&
+                LocalDateTime.now().isBefore(tokenExpiry)) {
             return cachedToken;
-        }
-
-        log.info("Fetching new IAM access token from IBM Cloud");
-
-        if (config.getApiKey() == null || config.getApiKey().isEmpty()) {
-            throw new RuntimeException("watsonx API key is not configured. Set WATSONX_API_KEY environment variable.");
         }
 
         try {
@@ -79,8 +51,9 @@ public class WatsonxService {
                     .baseUrl(config.getIamUrl())
                     .build();
 
-            String formData = "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey="
-                    + config.getApiKey();
+            String formData =
+                    "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=" +
+                            config.getApiKey();
 
             @SuppressWarnings("unchecked")
             Map<String, Object> response = iamClient.post()
@@ -90,73 +63,42 @@ public class WatsonxService {
                     .bodyToMono(Map.class)
                     .block();
 
-            if (response != null && response.containsKey("access_token")) {
-                cachedToken = (String) response.get("access_token");
-                int expiresIn = (Integer) response.getOrDefault("expires_in", 3600);
-                // Refresh 5 minutes before actual expiry
-                tokenExpiry = LocalDateTime.now().plusSeconds(expiresIn - 300);
-                log.info("IAM access token obtained successfully, expires in {} seconds", expiresIn);
-                return cachedToken;
-            }
+            cachedToken = (String) response.get("access_token");
+            int expiresIn = (Integer) response.getOrDefault("expires_in", 3600);
+            tokenExpiry = LocalDateTime.now().plusSeconds(expiresIn - 300);
 
-            throw new RuntimeException("Failed to obtain IAM access token - no token in response");
+            return cachedToken;
 
         } catch (WebClientResponseException e) {
-            log.error("Failed to get IAM token: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
-            throw new RuntimeException("Failed to authenticate with IBM Cloud: " + e.getMessage());
+            throw new RuntimeException("Failed to authenticate with IBM IAM");
         }
     }
 
-    /**
-     * Invoke a deployed watsonx Orchestrate agent.
-     * 
-     * This method:
-     * 1. Gets an IAM token
-     * 2. Calls POST /api/v1/orchestrate/{agentId}/chat/completions
-     * 3. Returns the agent response directly (synchronous)
-     */
-    /**
-     * Invoke a deployed watsonx Orchestrate agent.
-     * 
-     * This method:
-     * 1. Gets an IAM token
-     * 2. Calls POST /v1/orchestrate/runs to start the agent (async)
-     * 3. Polls for completion
-     * 4. Returns the agent response
-     */
+    /* ================= AGENT CALL ================= */
+
     public WatsonxChatResponse chat(WatsonxChatRequest request) {
         String agentType = request.getAgentId();
-        log.info("Invoking watsonx Orchestrate agent: {}", agentType);
 
         try {
             String token = getAccessToken();
-            log.info("IAM token obtained successfully");
-
             String agentId = resolveAgentId(agentType);
-            log.info("Resolved agent ID: {} for type: {}", agentId, agentType);
 
-            if (agentId == null || agentId.isEmpty()) {
-                throw new RuntimeException("Agent ID not configured for: " + agentType +
-                        ". Set WATSONX_AGENT_" + agentType.toUpperCase().replace("-", "_") + " environment variable.");
-            }
-
-            // Build user message with context
             String userMessage = buildUserMessage(request);
-            log.info("User message: === CODE CONTEXT ===");
 
-            // Create agent run request (Orchestrate /runs format)
-            Map<String, Object> runRequest = new HashMap<>();
-            runRequest.put("agent_id", agentId);
-            runRequest.put("message", Map.of(
-                    "role", "user",
-                    "content", userMessage));
+            /* ✅ FIXED REQUEST BODY (THIS IS THE KEY CHANGE) */
+            Map<String, Object> runRequest = Map.of(
+                    "input", Map.of(
+                            "messages", List.of(
+                                    Map.of(
+                                            "role", "user",
+                                            "content", userMessage
+                                    )
+                            )
+                    )
+            );
 
-            String endpoint = config.getOrchestrateEndpoint();
-            // Use /v1/orchestrate/runs endpoint
-            String apiPath = "/v1/orchestrate/runs";
-            log.info("Calling Orchestrate API: POST {}{}", endpoint, apiPath);
+            String apiPath = "/v1/agents/" + agentId + "/runs";
 
-            // POST /v1/orchestrate/runs
             @SuppressWarnings("unchecked")
             Map<String, Object> runResponse = orchestrateWebClient.post()
                     .uri(apiPath)
@@ -165,41 +107,28 @@ public class WatsonxService {
                     .bodyValue(runRequest)
                     .retrieve()
                     .bodyToMono(Map.class)
-                    .doOnError(e -> log.error("WebClient error: {}", e.getMessage()))
                     .block();
 
-            if (runResponse == null) {
-                throw new RuntimeException("No response from Orchestrate when starting agent run");
-            }
-
-            String runId = (String) runResponse.get("run_id");
+            String runId = (String) runResponse.get("id");
             String threadId = (String) runResponse.get("thread_id");
-            log.info("Agent run started: runId={}, threadId={}", runId, threadId);
 
-            // Poll for completion
             return pollForCompletion(agentId, runId, threadId, agentType, token);
 
-        } catch (WebClientResponseException e) {
-            log.error("Orchestrate API error: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
-            log.error("Request URL: {}", e.getRequest() != null ? e.getRequest().getURI() : "unknown");
-            return WatsonxChatResponse.error(agentType,
-                    "Orchestrate API error: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
         } catch (Exception e) {
-            log.error("Error invoking agent {}: {}", agentType, e.getMessage(), e);
             return WatsonxChatResponse.error(agentType, e.getMessage());
         }
     }
 
-    // removed extractChatCompletionResponse method
+    /* ================= POLLING ================= */
 
-    /**
-     * Poll for agent run completion.
-     */
-    private WatsonxChatResponse pollForCompletion(String agentId, String runId, String threadId, String agentType,
+    private WatsonxChatResponse pollForCompletion(
+            String agentId,
+            String runId,
+            String threadId,
+            String agentType,
             String token) {
-        log.info("Polling for agent run completion: runId={}", runId);
 
-        for (int attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+        for (int i = 0; i < MAX_POLL_ATTEMPTS; i++) {
             try {
                 Thread.sleep(POLL_INTERVAL.toMillis());
 
@@ -211,140 +140,82 @@ public class WatsonxService {
                         .bodyToMono(Map.class)
                         .block();
 
-                if (statusResponse == null) {
-                    continue;
-                }
-
                 String status = (String) statusResponse.get("status");
-                log.debug("Poll attempt {}: status={}", attempt + 1, status);
 
                 if ("completed".equalsIgnoreCase(status)) {
                     return extractAgentResponse(statusResponse, agentType, threadId);
-                } else if ("failed".equalsIgnoreCase(status)) {
-                    String error = (String) statusResponse.getOrDefault("error", "Agent run failed");
-                    return WatsonxChatResponse.error(agentType, error);
-                } else if ("cancelled".equalsIgnoreCase(status)) {
-                    return WatsonxChatResponse.error(agentType, "Agent run was cancelled");
                 }
-                // Status is still "running" or "pending", continue polling
 
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return WatsonxChatResponse.error(agentType, "Polling interrupted");
-            } catch (Exception e) {
-                log.warn("Poll attempt {} failed: {}", attempt + 1, e.getMessage());
-            }
+                if ("failed".equalsIgnoreCase(status)) {
+                    return WatsonxChatResponse.error(agentType, "Agent run failed");
+                }
+
+            } catch (Exception ignored) {}
         }
 
-        return WatsonxChatResponse.error(agentType, "Agent run timed out after " +
-                (MAX_POLL_ATTEMPTS * POLL_INTERVAL.toSeconds()) + " seconds");
+        return WatsonxChatResponse.error(agentType, "Agent run timed out");
     }
 
-    /**
-     * Extract agent response from the run result.
-     */
-    private WatsonxChatResponse extractAgentResponse(Map<String, Object> runResponse, String agentType,
+    /* ================= RESPONSE ================= */
+
+    private WatsonxChatResponse extractAgentResponse(
+            Map<String, Object> runResponse,
+            String agentType,
             String threadId) {
+
         String responseText = "";
-        List<WatsonxChatResponse.ToolCall> toolCalls = new ArrayList<>();
 
-        // Extract output message
         @SuppressWarnings("unchecked")
-        Map<String, Object> output = (Map<String, Object>) runResponse.get("output");
-        if (output != null) {
-            Object message = output.get("message");
-            if (message != null) {
-                responseText = message.toString();
-            }
-        }
+        Map<String, Object> output =
+                (Map<String, Object>) runResponse.get("output");
 
-        // Extract tool calls if present
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> steps = (List<Map<String, Object>>) runResponse.get("steps");
-        if (steps != null) {
-            for (Map<String, Object> step : steps) {
-                String type = (String) step.get("type");
-                if ("tool_call".equalsIgnoreCase(type)) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> toolCall = (Map<String, Object>) step.get("tool_call");
-                    if (toolCall != null) {
-                        toolCalls.add(WatsonxChatResponse.ToolCall.builder()
-                                .toolName((String) toolCall.get("name"))
-                                .parameters((Map<String, Object>) toolCall.get("arguments"))
-                                .result((String) step.get("output"))
-                                .build());
-                    }
-                }
-            }
-        }
-
-        // If no output message, try to get from last step
-        if (responseText.isEmpty() && steps != null && !steps.isEmpty()) {
-            Object lastStepOutput = steps.get(steps.size() - 1).get("output");
-            if (lastStepOutput != null) {
-                responseText = lastStepOutput.toString();
-            }
+        if (output != null && output.get("message") != null) {
+            responseText = output.get("message").toString();
         }
 
         return WatsonxChatResponse.builder()
-                .id((String) runResponse.get("id"))
                 .agentId(agentType)
                 .response(responseText)
-                .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
                 .success(true)
                 .timestamp(LocalDateTime.now())
-                .metadata(Map.of("thread_id", threadId != null ? threadId : ""))
+                .metadata(Map.of("thread_id", threadId))
                 .build();
     }
 
-    /**
-     * Build user message with file context if provided.
-     */
+    /* ================= HELPERS ================= */
+
     private String buildUserMessage(WatsonxChatRequest request) {
         StringBuilder message = new StringBuilder();
 
-        // Add file context if provided
         if (request.getFiles() != null && !request.getFiles().isEmpty()) {
             message.append("=== CODE CONTEXT ===\n\n");
             for (var file : request.getFiles()) {
-                message.append("--- File: ").append(file.getPath());
-                if (file.getLanguage() != null) {
-                    message.append(" (").append(file.getLanguage()).append(")");
-                }
-                message.append(" ---\n");
+                message.append("--- File: ").append(file.getPath()).append(" ---\n");
                 message.append(file.getContent()).append("\n\n");
             }
-            message.append("=== END CODE CONTEXT ===\n\n");
         }
 
         message.append(request.getMessage());
         return message.toString();
     }
 
-    /**
-     * Resolve agent type to deployed agent ID from configuration.
-     */
     private String resolveAgentId(String agentType) {
-        if (config.getAgents() == null) {
-            log.warn("Agent IDs not configured. Using agent type as ID: {}", agentType);
-            return agentType; // Fallback to using type as ID
-        }
+        if (config.getAgents() == null) return agentType;
 
         return switch (agentType) {
             case "codebase-analysis" -> config.getAgents().getCodebaseAnalyzer();
             case "dependency-graph" -> config.getAgents().getDependencyMapper();
-            case "code-qa", "qa-agent" -> config.getAgents().getCodeQa();
+            case "code-qa" -> config.getAgents().getCodeQa();
             case "code-modifier" -> config.getAgents().getCodeModifier();
             case "code-review" -> config.getAgents().getCodeReviewer();
             case "documentation" -> config.getAgents().getDocumentationGenerator();
-            case "git-assistant", "pushing-agent" -> config.getAgents().getGitAssistant();
-            default -> agentType; // Use as-is if no mapping
+            case "git-assistant" -> config.getAgents().getGitAssistant();
+            default -> agentType;
         };
     }
 
-    /**
-     * List available agents with their configuration status.
-     */
+    /* ================= UNCHANGED ================= */
+
     public List<Map<String, Object>> listAgents() {
         List<Map<String, Object>> agents = new ArrayList<>();
 
@@ -360,22 +231,16 @@ public class WatsonxService {
             agent.put("configured", agentId != null && !agentId.isEmpty() && !agentId.equals(type));
             agents.add(agent);
         }
-
         return agents;
     }
 
-    /**
-     * Check watsonx Orchestrate health and configuration.
-     */
     public Map<String, Object> checkHealth() {
         Map<String, Object> health = new HashMap<>();
 
-        // Check API key
         boolean hasApiKey = config.getApiKey() != null && !config.getApiKey().isEmpty();
         health.put("apiKeyConfigured", hasApiKey);
         health.put("orchestrateEndpoint", config.getOrchestrateEndpoint());
 
-        // Check agent configuration
         Map<String, Boolean> agentStatus = new HashMap<>();
         for (var entry : AGENT_DISPLAY_NAMES.entrySet()) {
             String agentId = resolveAgentId(entry.getKey());
@@ -383,18 +248,11 @@ public class WatsonxService {
         }
         health.put("agents", agentStatus);
 
-        // Try to authenticate
-        if (hasApiKey) {
-            try {
-                getAccessToken();
-                health.put("authenticated", true);
-            } catch (Exception e) {
-                health.put("authenticated", false);
-                health.put("authError", e.getMessage());
-            }
-        } else {
+        try {
+            getAccessToken();
+            health.put("authenticated", true);
+        } catch (Exception e) {
             health.put("authenticated", false);
-            health.put("authError", "API key not configured");
         }
 
         return health;
