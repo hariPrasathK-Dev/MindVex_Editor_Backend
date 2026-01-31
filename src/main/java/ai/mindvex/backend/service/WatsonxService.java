@@ -122,7 +122,10 @@ public class WatsonxService {
 
         try {
             String token = getAccessToken();
+            log.info("IAM token obtained successfully");
+
             String agentId = resolveAgentId(agentType);
+            log.info("Resolved agent ID: {} for type: {}", agentId, agentType);
 
             if (agentId == null || agentId.isEmpty()) {
                 throw new RuntimeException("Agent ID not configured for: " + agentType +
@@ -131,12 +134,14 @@ public class WatsonxService {
 
             // Build user message with context
             String userMessage = buildUserMessage(request);
+            log.debug("User message: {}", userMessage.substring(0, Math.min(200, userMessage.length())));
 
-            // Create agent run
+            // Create agent run request
             Map<String, Object> runRequest = new HashMap<>();
             runRequest.put("input", Map.of("message", userMessage));
 
-            log.debug("Starting agent run for agentId: {}", agentId);
+            String endpoint = config.getOrchestrateEndpoint();
+            log.info("Calling Orchestrate API: POST {}/v1/agents/{}/runs", endpoint, agentId);
 
             // POST /v1/agents/{agentId}/runs
             @SuppressWarnings("unchecked")
@@ -147,6 +152,7 @@ public class WatsonxService {
                     .bodyValue(runRequest)
                     .retrieve()
                     .bodyToMono(Map.class)
+                    .doOnError(e -> log.error("WebClient error: {}", e.getMessage()))
                     .block();
 
             if (runResponse == null) {
@@ -167,7 +173,8 @@ public class WatsonxService {
             return pollForCompletion(agentId, runId, agentType, token);
 
         } catch (WebClientResponseException e) {
-            log.error("Orchestrate API error: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Orchestrate API error: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Request URL: {}", e.getRequest() != null ? e.getRequest().getURI() : "unknown");
             return WatsonxChatResponse.error(agentType,
                     "Orchestrate API error: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
         } catch (Exception e) {
