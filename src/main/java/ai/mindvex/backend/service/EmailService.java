@@ -22,41 +22,21 @@ public class EmailService {
     private String fromEmail;
 
     /**
-     * Send OTP verification email
+     * Send a generic email
      */
     @Async
-    public void sendOtpEmail(String to, String otp, String purpose) {
+    public void sendEmail(String to, String subject, String body) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(fromEmail);
             message.setTo(to);
-            message.setSubject("MindVex - Your Verification Code");
-            message.setText(buildOtpEmailBody(otp, purpose));
+            message.setSubject(subject);
+            message.setText(body);
 
             mailSender.send(message);
-            log.info("OTP email sent successfully to: {}", to);
+            log.info("Email sent successfully to: {}", to);
         } catch (Exception e) {
-            log.error("Failed to send OTP email to: {}", to, e);
-            // In production, you might want to throw an exception here
-            // For development, we'll log the OTP so testing is possible without email
-            log.warn("Email sending failed. OTP for {} is: {}", to, otp);
+            log.error("Failed to send email to: {}", to, e);
         }
-    }
-
-    private String buildOtpEmailBody(String otp, String purpose) {
-        return String.format("""
-                Hello,
-
-                Your verification code for %s is:
-
-                %s
-
-                This code will expire in 5 minutes.
-
-                If you didn't request this code, please ignore this email.
-
-                Best regards,
-                The MindVex Team
-                """, purpose, otp);
     }
 }
