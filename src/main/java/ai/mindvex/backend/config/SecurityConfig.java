@@ -61,10 +61,8 @@ public class SecurityConfig {
                                                                 "/api/auth/**",
                                                                 "/swagger-ui/**",
                                                                 "/api-docs/**",
-                                                                "/actuator/**",
-                                                                "/api/ai/**", // AI agent endpoints
-                                                                "/api/watsonx/**" // watsonx management endpoints
-                                                ).permitAll()
+                                                                "/actuator/**")
+                                                .permitAll()
                                                 .anyRequest().authenticated())
                                 .sessionManagement(session -> session
                                                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
