@@ -44,6 +44,8 @@ spring:
             scope:
               - user:email
               - read:user
+              - repo
+              - read:packages
             redirect-uri: "{baseUrl}/api/auth/oauth2/callback/{registrationId}"
         provider:
           github:
