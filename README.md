@@ -1,241 +1,134 @@
-# MindVex Backend API
+# MindVex Backend
 
-Spring Boot backend for the MindVex AI Development Platform.
-
-## Features
-
-- ✅ JWT Authentication
-- ✅ User Management (Registration, Login, Profile)
-- ✅ Workspace CRUD Operations
-- ✅ Chat History Storage
-- ✅ PostgreSQL Database with Flyway Migrations
-- ✅ Redis Caching
-- ✅ CORS Configuration for Cloudflare Frontend
-- ✅ Swagger/OpenAPI Documentation
+Spring Boot backend for the MindVex Intelligent Codebase Analyser platform.
 
 ## Tech Stack
 
-- **Spring Boot 3.2.1** - Framework
-- **Java 17** - Language
-- **PostgreSQL 15** - Database
-- **Redis 7** - Caching
-- **Maven** - Build Tool
-- **Flyway** - Database Migrations
-- **JWT** - Authentication
-- **Lombok** - Boilerplate Reduction
-
-## Prerequisites
-
-- Java 17 or higher
-- Maven 3.6+
-- Docker & Docker Compose (for database)
-- PostgreSQL 15+ (if not using Docker)
-- Redis 7+ (if not using Docker)
+- **Spring Boot 3.2.x** — Java 17
+- **PostgreSQL** — Primary database (Flyway-managed schema)
+- **Flyway** — Database migrations
+- **JWT + GitHub OAuth2** — Authentication
+- **Springdoc/Swagger** — API documentation available at `/swagger-ui.html`
+- **Maven** — Build tool
 
 ## Quick Start
 
-### 1. Clone and Navigate
+### Prerequisites
+
+- Java 17+
+- Maven 3.6+
+- PostgreSQL 15+ (or Docker)
+
+### Setup
 
 ```bash
-cd c:\Users\hp859\Desktop\IntelligentCodebaseAnalyser\MindVex_Editor_Backend
-```
-
-### 2. Start Database Services
-
-```bash
-docker-compose up -d
-```
-
-This starts PostgreSQL on port 5432 and Redis on port 6379.
-
-### 3. Configure Environment
-
-```bash
+# 1. Copy the example env file and fill in values
 copy .env.example .env
-```
 
-Edit `.env` if needed (defaults work for local development).
+# 2. Start a local PostgreSQL instance (optional — via Docker)
+docker-compose up -d
 
-### 4. Build the Project
-
-```bash
-mvn clean install
-```
-
-### 5. Run the Application
-
-```bash
+# 3. Run the application
 mvn spring-boot:run
 ```
 
-The API will be available at: **http://localhost:8080**
+API: **http://localhost:8080**  
+Swagger UI: **http://localhost:8080/swagger-ui.html**
 
-### 6. Access Swagger UI
+## Environment Variables
 
-Open your browser: **http://localhost:8080/swagger-ui.html**
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | JDBC URL, e.g. `jdbc:postgresql://localhost:5432/mindvex_db` |
+| `JWT_SECRET` | Minimum 64-character random secret |
+| `GITHUB_CLIENT_ID` | GitHub OAuth2 App client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth2 App client secret |
+| `CORS_ORIGINS` | Comma-separated allowed origins, e.g. `http://localhost:5173` |
+| `APP_OAUTH2_AUTHORIZED_REDIRECT_URIS` | Comma-separated OAuth2 redirect URIs |
+| `GIT_REPO_BASE_DIR` | Directory where cloned repos are stored (default: `/tmp/mindvex-repos`) |
+| `SPRING_PROFILES_ACTIVE` | `dev` (local) or `prod` (production) |
 
 ## API Endpoints
 
 ### Authentication
-
-- `POST /api/auth/register` - Register new user
-- `POST /api/auth/login` - Login user
-- `POST /api/auth/refresh` - Refresh JWT token
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/auth/register` | Register with email/password |
+| `POST` | `/api/auth/login` | Login, returns JWT |
+| `POST` | `/api/auth/refresh` | Refresh access token |
+| `GET` | `/api/auth/oauth2/authorize/github` | Start GitHub OAuth2 flow |
 
 ### Users
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/users/me` | Get current user profile |
+| `PUT` | `/api/users/me` | Update profile |
 
-- `GET /api/users/me` - Get current user profile
-- `PUT /api/users/me` - Update current user profile
+### Repository History
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/repository-history` | Save repository to history |
+| `GET` | `/api/repository-history` | Get user's repository history |
+| `DELETE` | `/api/repository-history/{id}` | Remove from history |
 
-### Workspaces
+### Code Graph & SCIP
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/scip/index` | Trigger SCIP indexing of a repo |
+| `GET` | `/api/scip/hover` | Hover info for a symbol |
+| `GET` | `/api/scip/references` | Find all references to a symbol |
+| `GET` | `/api/graph/dependencies` | Get file dependency graph |
 
-- `POST /api/workspaces` - Create workspace
-- `GET /api/workspaces` - Get all user workspaces
-- `GET /api/workspaces/{id}` - Get workspace by ID
-- `PUT /api/workspaces/{id}` - Update workspace
-- `DELETE /api/workspaces/{id}` - Delete workspace
+### Analytics
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/analytics/hotspots` | Most-changed files (hotspot analysis) |
+| `GET` | `/api/analytics/churn` | Weekly code churn stats |
+| `GET` | `/api/analytics/blame` | Git blame for a file |
+| `GET` | `/api/analytics/diff` | Commit file diffs |
 
-### Chats
-
-- `POST /api/workspaces/{workspaceId}/chats` - Create chat
-- `GET /api/workspaces/{workspaceId}/chats` - Get workspace chats
-- `GET /api/chats/{id}` - Get chat by ID
-- `POST /api/chats/{id}/messages` - Add message to chat
-- `GET /api/chats/{id}/messages` - Get chat messages
-- `DELETE /api/chats/{id}` - Delete chat
-
-## Testing the API
-
-### Register a User
-
-```bash
-curl -X POST http://localhost:8080/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"test@example.com\",\"password\":\"Test123!\",\"fullName\":\"Test User\"}"
-```
-
-### Login
-
-```bash
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"test@example.com\",\"password\":\"Test123!\"}"
-```
-
-Save the `token` from the response.
-
-### Create Workspace (Authenticated)
-
-```bash
-curl -X POST http://localhost:8080/api/workspaces \
-  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
-  -H "Content-Type: application/json" \
-  -d "{\"name\":\"My Workspace\",\"description\":\"Test workspace\"}"
-```
-
-## Database Migrations
-
-Flyway automatically runs migrations on startup. Migration files are in:
-```
-src/main/resources/db/migration/
-```
-
-To manually run migrations:
-```bash
-mvn flyway:migrate
-```
-
-## Configuration
-
-### Application Profiles
-
-- **dev** - Development (verbose logging, local database)
-- **prod** - Production (environment variables, minimal logging)
-
-Set profile:
-```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-```
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL JDBC URL | `jdbc:postgresql://localhost:5432/mindvex` |
-| `DATABASE_USERNAME` | Database username | `mindvex` |
-| `DATABASE_PASSWORD` | Database password | `mindvex_password` |
-| `REDIS_HOST` | Redis host | `localhost` |
-| `REDIS_PORT` | Redis port | `6379` |
-| `JWT_SECRET` | JWT signing secret | (see .env.example) |
-| `SPRING_PROFILES_ACTIVE` | Active profile | `dev` |
-
-## Development
-
-### Project Structure
+## Project Structure
 
 ```
 src/main/java/ai/mindvex/backend/
-├── config/              # Configuration classes
-├── controller/          # REST controllers
-├── dto/                 # Data Transfer Objects
-├── entity/              # JPA entities
-├── exception/           # Custom exceptions
-├── repository/          # JPA repositories
-├── security/            # Security & JWT
-└── service/             # Business logic
+├── config/          # CORS and Security config
+├── controller/      # REST controllers
+├── dto/             # Request/response DTOs
+├── entity/          # JPA entities
+├── exception/       # Global exception handler
+├── repository/      # Spring Data JPA repositories
+├── security/        # JWT filter, OAuth2 handlers
+└── service/         # Business logic
+src/main/resources/
+├── application.yml           # Base config
+├── application-dev.yml       # Dev profile (verbose logging)
+├── application-prod.yml      # Prod profile (tighter pool, quiet logs)
+└── db/migration/             # Flyway SQL migrations (V1–V14)
 ```
 
-### Adding New Endpoints
+## Profiles
 
-1. Create DTO in `dto/`
-2. Add method to Service
-3. Add endpoint to Controller
-4. Update Swagger annotations
+- **dev** — verbose SQL/logging, reads all secrets from `.env`
+- **prod** — minimal logging, reads all secrets from OS environment (Render/Railway/etc.)
 
 ## Troubleshooting
 
-### Port Already in Use
-
-```bash
-# Windows
+### Port in use
+```powershell
 netstat -ano | findstr :8080
 taskkill /PID <PID> /F
-
-# Linux/Mac
-lsof -ti:8080 | xargs kill -9
 ```
 
-### Database Connection Failed
-
+### Database connection failed
 ```bash
-# Check if PostgreSQL is running
-docker ps | findstr postgres
-
-# Restart database
 docker-compose restart postgres
 ```
 
-### Flyway Migration Failed
-
+### Flyway migration failed
 ```bash
-# Clean and rebuild
 mvn flyway:clean flyway:migrate
 ```
-
-## Next Steps
-
-1. ✅ Complete remaining service implementations
-2. ✅ Add comprehensive unit tests
-3. ✅ Add integration tests
-4. ✅ Implement file upload for workspaces
-5. ✅ Add WebSocket support for real-time chat
-6. ✅ Implement rate limiting
-7. ✅ Add monitoring and metrics
 
 ## License
 
 MIT
-
-## Support
-
-For issues, please create a GitHub issue or contact the development team.
