@@ -1,14 +1,16 @@
-# MindVex Backend
+﻿# MindVex Backend
 
 Spring Boot backend for the MindVex Intelligent Codebase Analyser platform.
 
 ## Tech Stack
 
 - **Spring Boot 3.2.x** — Java 17
-- **PostgreSQL** — Primary database (Flyway-managed schema)
+- **PostgreSQL** — Primary database (Flyway-managed schema, V1–V14 migrations)
 - **Flyway** — Database migrations
-- **JWT + GitHub OAuth2** — Authentication
-- **Springdoc/Swagger** — API documentation available at `/swagger-ui.html`
+- **JWT + GitHub OAuth2** — Authentication and GitHub integration
+- **JGit** — Git repository cloning and history mining
+- **SCIP** — Language-agnostic code intelligence (hover, references)
+- **Springdoc/Swagger** — API docs at `/swagger-ui.html`
 - **Maven** — Build tool
 
 ## Quick Start
@@ -32,7 +34,7 @@ docker-compose up -d
 mvn spring-boot:run
 ```
 
-API: **http://localhost:8080**  
+API: **http://localhost:8080**
 Swagger UI: **http://localhost:8080/swagger-ui.html**
 
 ## Environment Variables
@@ -51,59 +53,72 @@ Swagger UI: **http://localhost:8080/swagger-ui.html**
 ## API Endpoints
 
 ### Authentication
+
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/auth/register` | Register with email/password |
 | `POST` | `/api/auth/login` | Login, returns JWT |
-| `POST` | `/api/auth/refresh` | Refresh access token |
 | `GET` | `/api/auth/oauth2/authorize/github` | Start GitHub OAuth2 flow |
 
 ### Users
+
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/users/me` | Get current user profile |
-| `PUT` | `/api/users/me` | Update profile |
+| `GET` | `/api/users/me/github-connection` | Get GitHub OAuth connection status |
+| `DELETE` | `/api/users/me/github-connection` | Disconnect GitHub OAuth |
 
 ### Repository History
+
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/repository-history` | Save repository to history |
 | `GET` | `/api/repository-history` | Get user's repository history |
-| `DELETE` | `/api/repository-history/{id}` | Remove from history |
+| `DELETE` | `/api/repository-history/{id}` | Remove a single entry |
+| `DELETE` | `/api/repository-history` | Clear all history |
 
-### Code Graph & SCIP
+### Code Graph
+
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/scip/index` | Trigger SCIP indexing of a repo |
-| `GET` | `/api/scip/hover` | Hover info for a symbol |
-| `GET` | `/api/scip/references` | Find all references to a symbol |
-| `GET` | `/api/graph/dependencies` | Get file dependency graph |
+| `POST` | `/api/graph/build` | Clone a repo and build its dependency graph |
+| `GET` | `/api/graph/dependencies` | Get file-level dependency graph |
+| `GET` | `/api/graph/references` | Find all references to a symbol |
+
+### SCIP Code Intelligence
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/scip/upload` | Upload a SCIP index file for processing |
+| `GET` | `/api/scip/hover` | Get hover information for a symbol |
+| `GET` | `/api/scip/jobs/{id}` | Check the status of an indexing job |
 
 ### Analytics
+
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/analytics/hotspots` | Most-changed files (hotspot analysis) |
-| `GET` | `/api/analytics/churn` | Weekly code churn stats |
-| `GET` | `/api/analytics/blame` | Git blame for a file |
-| `GET` | `/api/analytics/diff` | Commit file diffs |
+| `POST` | `/api/analytics/mine` | Clone a repo and mine its git history |
+| `GET` | `/api/analytics/hotspots` | Get most-changed files (hotspot analysis) |
+| `GET` | `/api/analytics/file-trend` | Get change frequency trend for a specific file |
+| `GET` | `/api/analytics/blame` | Get evolutionary blame for a file |
 
 ## Project Structure
 
 ```
 src/main/java/ai/mindvex/backend/
-├── config/          # CORS and Security config
-├── controller/      # REST controllers
-├── dto/             # Request/response DTOs
-├── entity/          # JPA entities
-├── exception/       # Global exception handler
-├── repository/      # Spring Data JPA repositories
-├── security/        # JWT filter, OAuth2 handlers
-└── service/         # Business logic
+ config/          # CORS and Security config
+ controller/      # REST controllers
+ dto/             # Request/response DTOs
+ entity/          # JPA entities
+ exception/       # Global exception handler
+ repository/      # Spring Data JPA repositories
+ security/        # JWT filter, OAuth2 handlers
+ service/         # Business logic
 src/main/resources/
-├── application.yml           # Base config
-├── application-dev.yml       # Dev profile (verbose logging)
-├── application-prod.yml      # Prod profile (tighter pool, quiet logs)
-└── db/migration/             # Flyway SQL migrations (V1–V14)
+ application.yml           # Base config
+ application-dev.yml       # Dev profile (verbose logging)
+ application-prod.yml      # Prod profile (tighter pool, quiet logs)
+ db/migration/             # Flyway SQL migrations (V1–V14)
 ```
 
 ## Profiles
@@ -114,17 +129,20 @@ src/main/resources/
 ## Troubleshooting
 
 ### Port in use
+
 ```powershell
 netstat -ano | findstr :8080
 taskkill /PID <PID> /F
 ```
 
 ### Database connection failed
+
 ```bash
 docker-compose restart postgres
 ```
 
 ### Flyway migration failed
+
 ```bash
 mvn flyway:clean flyway:migrate
 ```
