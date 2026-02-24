@@ -27,4 +27,14 @@ public interface IndexJobRepository extends JpaRepository<IndexJob, Long> {
             LIMIT 1
             """)
     Optional<IndexJob> claimNextPendingJob();
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")) // SKIP_LOCKED
+    @Query("""
+            SELECT j FROM IndexJob j
+            WHERE j.status = 'pending' AND j.jobType = :jobType
+            ORDER BY j.createdAt ASC
+            LIMIT 1
+            """)
+    Optional<IndexJob> claimNextPendingJobType(@org.springframework.data.repository.query.Param("jobType") String jobType);
 }

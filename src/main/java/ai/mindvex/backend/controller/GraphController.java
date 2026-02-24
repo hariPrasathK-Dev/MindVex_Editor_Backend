@@ -7,14 +7,16 @@ import ai.mindvex.backend.dto.GraphResponse.CyNode;
 import ai.mindvex.backend.dto.GraphResponse.CyNode.CyNodeData;
 import ai.mindvex.backend.dto.ReferenceResult;
 import ai.mindvex.backend.entity.IndexJob;
+import ai.mindvex.backend.entity.User;
 import ai.mindvex.backend.repository.IndexJobRepository;
+import ai.mindvex.backend.repository.UserRepository;
 import ai.mindvex.backend.service.DependencyEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -36,6 +38,7 @@ public class GraphController {
 
     private final DependencyEngine dependencyEngine;
     private final IndexJobRepository indexJobRepository;
+    private final UserRepository userRepository;
     private final JdbcTemplate jdbc;
 
     // ─── POST /api/graph/build ────────────────────────────────────────────────
@@ -48,9 +51,9 @@ public class GraphController {
     @PostMapping("/build")
     public ResponseEntity<Map<String, Object>> buildGraph(
             @RequestParam String repoUrl,
-            @AuthenticationPrincipal Jwt jwt) {
+            Authentication authentication) {
 
-        Long userId = extractUserId(jwt);
+        Long userId = extractUserId(authentication);
 
         IndexJob job = new IndexJob();
         job.setUserId(userId);
@@ -77,9 +80,9 @@ public class GraphController {
             @RequestParam String repoUrl,
             @RequestParam(required = false) String rootFile,
             @RequestParam(defaultValue = "20") int depth,
-            @AuthenticationPrincipal Jwt jwt) {
+            Authentication authentication) {
 
-        Long userId = extractUserId(jwt);
+        Long userId = extractUserId(authentication);
 
         // Collect raw edges
         List<Object[]> rawEdges;
@@ -153,9 +156,9 @@ public class GraphController {
     public ResponseEntity<List<ReferenceResult>> getReferences(
             @RequestParam String repoUrl,
             @RequestParam String symbol,
-            @AuthenticationPrincipal Jwt jwt) {
+            Authentication authentication) {
 
-        Long userId = extractUserId(jwt);
+        Long userId = extractUserId(authentication);
 
         String sql = """
                 SELECT d.relative_uri AS filePath,
@@ -187,8 +190,11 @@ public class GraphController {
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    private Long extractUserId(Jwt jwt) {
-        return Long.parseLong(jwt.getSubject());
+    private Long extractUserId(Authentication authentication) {
+        UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        return user.getId();
     }
 
     /** Stable node ID: replace non-alphanumeric with underscore. */
@@ -223,3 +229,4 @@ public class GraphController {
         return "unknown";
     }
 }
+

@@ -19,6 +19,6 @@ public class CustomUserDetailsService implements UserDetailsService {
         ai.mindvex.backend.entity.User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + email));
         
-        return new User(user.getEmail(), user.getPasswordHash(), new ArrayList<>());
+        return new User(user.getEmail(), user.getPasswordHash() != null ? user.getPasswordHash() : "", new ArrayList<>());
     }
 }

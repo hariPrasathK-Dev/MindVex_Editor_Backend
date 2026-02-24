@@ -2,7 +2,6 @@ package ai.mindvex.backend.controller;
 
 import ai.mindvex.backend.dto.BlameLineResponse;
 import ai.mindvex.backend.dto.HotspotResponse;
-import ai.mindvex.backend.dto.IndexJobResponse;
 import ai.mindvex.backend.dto.WeeklyChurnResponse;
 import ai.mindvex.backend.entity.FileChurnStat;
 import ai.mindvex.backend.entity.IndexJob;
@@ -10,13 +9,12 @@ import ai.mindvex.backend.entity.User;
 import ai.mindvex.backend.repository.FileChurnStatRepository;
 import ai.mindvex.backend.repository.IndexJobRepository;
 import ai.mindvex.backend.repository.UserRepository;
-import ai.mindvex.backend.service.ChurnCalculationEngine;
 import ai.mindvex.backend.service.JGitMiningService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -42,7 +40,6 @@ import java.util.stream.Collectors;
 public class AnalyticsController {
 
         private final JGitMiningService miningService;
-        private final ChurnCalculationEngine churnEngine;
         private final FileChurnStatRepository churnStatRepository;
         private final IndexJobRepository indexJobRepository;
         private final UserRepository userRepository;
@@ -57,8 +54,8 @@ public class AnalyticsController {
         public ResponseEntity<Map<String, Object>> triggerMining(
                         @RequestParam String repoUrl,
                         @RequestParam(defaultValue = "90") int days,
-                        @AuthenticationPrincipal Jwt jwt) {
-                Long userId = extractUserId(jwt);
+                        Authentication authentication) {
+                Long userId = extractUserId(authentication);
 
                 IndexJob job = new IndexJob();
                 job.setUserId(userId);
@@ -83,8 +80,8 @@ public class AnalyticsController {
                         @RequestParam String repoUrl,
                         @RequestParam(defaultValue = "12") int weeks,
                         @RequestParam(defaultValue = "25.0") double threshold,
-                        @AuthenticationPrincipal Jwt jwt) {
-                Long userId = extractUserId(jwt);
+                        Authentication authentication) {
+                Long userId = extractUserId(authentication);
                 LocalDate since = LocalDate.now().minusWeeks(weeks);
 
                 List<FileChurnStat> stats = churnStatRepository.findHotspots(userId, repoUrl, since, threshold);
@@ -109,8 +106,8 @@ public class AnalyticsController {
                         @RequestParam String repoUrl,
                         @RequestParam String filePath,
                         @RequestParam(defaultValue = "12") int weeks,
-                        @AuthenticationPrincipal Jwt jwt) {
-                Long userId = extractUserId(jwt);
+                        Authentication authentication) {
+                Long userId = extractUserId(authentication);
                 LocalDate since = LocalDate.now().minusWeeks(weeks);
 
                 List<WeeklyChurnResponse> trend = churnStatRepository
@@ -137,8 +134,8 @@ public class AnalyticsController {
         public ResponseEntity<List<BlameLineResponse>> getBlame(
                         @RequestParam String repoUrl,
                         @RequestParam String filePath,
-                        @AuthenticationPrincipal Jwt jwt) {
-                Long userId = extractUserId(jwt);
+                        Authentication authentication) {
+                Long userId = extractUserId(authentication);
 
                 try {
                         User user = userRepository.findById(userId)
@@ -147,6 +144,9 @@ public class AnalyticsController {
                         List<BlameLineResponse> lines = miningService.blame(repoUrl, user.getGithubAccessToken(),
                                         filePath);
                         return ResponseEntity.ok(lines);
+                } catch (IllegalStateException e) {
+                        log.warn("[Blame] Repo not ready for {} / {}: {}", repoUrl, filePath, e.getMessage());
+                        return ResponseEntity.badRequest().build();
                 } catch (Exception e) {
                         log.error("[Blame] Failed for {} / {}: {}", repoUrl, filePath, e.getMessage());
                         return ResponseEntity.internalServerError().build();
@@ -176,7 +176,10 @@ public class AnalyticsController {
                 return new HotspotResponse(filePath, avgChurn, totalCommits, totalAdded, totalDeleted, trend);
         }
 
-        private Long extractUserId(Jwt jwt) {
-                return Long.parseLong(jwt.getSubject());
+        private Long extractUserId(Authentication authentication) {
+                UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+                User user = userRepository.findByEmail(userDetails.getUsername())
+                                .orElseThrow(() -> new RuntimeException("User not found"));
+                return user.getId();
         }
 }

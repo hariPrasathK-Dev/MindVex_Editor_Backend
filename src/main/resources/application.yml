@@ -1,5 +1,6 @@
 server:
   port: ${PORT:8080}
+  max-http-header-size: 65536
   error:
     include-message: always
     include-binding-errors: always
@@ -12,6 +13,8 @@ spring:
   # DATABASE_URL is the full JDBC URL — same var name used on Render and in .env
   datasource:
     url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -63,6 +66,10 @@ jwt:
   secret: ${JWT_SECRET}
   expiration: 86400000 # 24 hours
   refresh-expiration: 604800000 # 7 days
+
+# ─── Gemini AI ──────────────────────────────────────────────────────────────
+gemini:
+  api-key: ${GEMINI_API_KEY:#{null}}
 
 # ─── CORS ────────────────────────────────────────────────────────────────────
 # CORS_ORIGINS: comma-separated list of allowed origins
