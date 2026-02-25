@@ -230,21 +230,20 @@ public class JGitMiningService {
 
     /**
      * Run git blame on a file and return per-line annotations.
-     * The repo must have been cloned previously via mineHistory().
+     * Auto-clones the repo if it hasn't been cloned yet.
      */
     public List<BlameLineResponse> blame(
             String repoUrl,
             String accessToken,
             String filePath) throws Exception {
         File repoDir = getRepoDir(repoUrl);
-        if (!repoDir.exists()) {
-            throw new IllegalStateException("Repository not yet cloned. Run /api/analytics/mine first.");
-        }
+
+        // Auto-clone if not yet cloned (no need to call /mine first)
+        Git git = cloneOrOpen(repoUrl, accessToken, repoDir);
 
         List<BlameLineResponse> lines = new ArrayList<>();
 
-        try (Git git = Git.open(repoDir);
-                Repository repo = git.getRepository()) {
+        try (Repository repo = git.getRepository()) {
 
             BlameCommand blameCmd = new BlameCommand(repo);
             blameCmd.setFilePath(filePath);
@@ -265,6 +264,8 @@ public class JGitMiningService {
 
                 lines.add(new BlameLineResponse(i + 1, hash, author, committedAt, content));
             }
+        } finally {
+            git.close();
         }
 
         log.info("[Blame] {} lines for {}/{}", lines.size(), repoUrl, filePath);
