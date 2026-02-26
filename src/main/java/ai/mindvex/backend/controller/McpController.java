@@ -184,7 +184,7 @@ public class McpController {
 
     @SuppressWarnings("unchecked")
     @PostMapping("/tools/chat")
-    public ResponseEntity<Map<String, Object>> aiChat(
+    public ResponseEntity<Map<String, Object>> chat(
             @RequestParam String repoUrl,
             @RequestBody Map<String, Object> body,
             Authentication authentication) {
@@ -192,117 +192,182 @@ public class McpController {
         Long userId = extractUserId(authentication);
         String message = (String) body.getOrDefault("message", "");
         List<Map<String, String>> history = (List<Map<String, String>>) body.getOrDefault("history", List.of());
+        Map<String, Object> provider = (Map<String, Object>) body.get("provider");
 
-        if (geminiApiKey == null || geminiApiKey.isBlank()) {
-            return ResponseEntity.ok(Map.of(
-                    "reply", "AI chat is not available — Gemini API key is not configured.",
-                    "model", "none"
-            ));
-        }
+        // ─── Context Gathering ──────────────────────────────────────────────────
 
-        // Gather codebase context for the AI
         var deps = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
-        Set<String> allFiles = new LinkedHashSet<>();
-        Map<String, Set<String>> modules = new LinkedHashMap<>();
+        Set<String> allFiles = new HashSet<>();
         deps.forEach(d -> {
             allFiles.add(d.getSourceFile());
             allFiles.add(d.getTargetFile());
-            String module = d.getSourceFile().contains("/")
-                    ? d.getSourceFile().substring(0, d.getSourceFile().indexOf("/"))
-                    : "(root)";
-            modules.computeIfAbsent(module, k -> new LinkedHashSet<>()).add(d.getSourceFile());
         });
 
-        StringBuilder codebaseContext = new StringBuilder();
-        codebaseContext.append("Repository: ").append(repoUrl).append("\n");
-        codebaseContext.append("Total files: ").append(allFiles.size()).append("\n");
-        codebaseContext.append("Total dependency edges: ").append(deps.size()).append("\n");
-        codebaseContext.append("Modules: ").append(modules.keySet()).append("\n\n");
+        String codebaseContext = String.format(
+                "Repository: %s\nFiles: %d\nDependencies: %d\nModules: %s",
+                repoUrl,
+                allFiles.size(),
+                deps.size(),
+                allFiles.stream().limit(20).collect(Collectors.joining(", "))
+        );
 
-        // Add module summary
-        modules.forEach((mod, files) -> {
-            codebaseContext.append("- ").append(mod).append(": ")
-                    .append(files.size()).append(" files");
-            if (files.size() <= 5) {
-                codebaseContext.append(" (").append(String.join(", ", files)).append(")");
+        // ─── Provider Selection ─────────────────────────────────────────────────
+
+        if (provider != null) {
+            String providerName = (String) provider.get("name");
+            String model = (String) provider.get("model");
+            String apiKey = (String) provider.get("apiKey");
+            String baseUrl = (String) provider.get("baseUrl");
+
+            try {
+                if ("Ollama".equals(providerName)) {
+                    return callOllama(message, history, model, baseUrl, codebaseContext);
+                } else if ("LMStudio".equals(providerName)) {
+                    return callOpenAILike(providerName, message, history, model, baseUrl != null ? baseUrl : "http://localhost:1234", apiKey, codebaseContext);
+                } else if ("Anthropic".equals(providerName)) {
+                    return callAnthropic(message, history, model, apiKey, codebaseContext);
+                } else if ("Groq".equals(providerName) || "OpenAI".equals(providerName) || "XAI".equals(providerName)) {
+                    return callOpenAILike(providerName, message, history, model, apiKey, baseUrl, codebaseContext);
+                } else if ("Google".equals(providerName)) {
+                    return callGemini(message, history, model, apiKey, codebaseContext);
+                }
+            } catch (Exception e) {
+                log.error("[McpChat] {} call failed: {}", providerName, e.getMessage());
+                return ResponseEntity.ok(Map.of(
+                        "reply", "⚠️ AI service (" + providerName + ") unavailable: " + e.getMessage(),
+                        "model", "error"
+                ));
             }
-            codebaseContext.append("\n");
-        });
-
-        // Try to find relevant code via semantic search
-        List<VectorEmbedding> relevantCode = embeddingService.semanticSearch(userId, repoUrl, message, 3);
-        if (!relevantCode.isEmpty()) {
-            codebaseContext.append("\nRelevant code snippets:\n");
-            relevantCode.forEach(chunk -> {
-                codebaseContext.append("\n// ").append(chunk.getFilePath()).append("\n");
-                String text = chunk.getChunkText();
-                codebaseContext.append(text.length() > 500 ? text.substring(0, 500) + "..." : text).append("\n");
-            });
         }
 
-        // Build Gemini request with conversation history
+        // Default to Gemini if no provider specified or recognized
+        return callGemini(message, history, "gemini-2.0-flash", geminiApiKey, codebaseContext);
+    }
+
+    private ResponseEntity<Map<String, Object>> callGemini(String message, List<Map<String, String>> history, String model, String apiKey, String context) {
+        if (apiKey == null || apiKey.isEmpty()) {
+            return ResponseEntity.ok(Map.of("reply", "⚠️ Google API key not configured.", "model", "error"));
+        }
+
         List<Map<String, Object>> contents = new ArrayList<>();
-
-        // System context as first user message
         contents.add(Map.of("role", "user", "parts", List.of(Map.of("text",
-                "You are MindVex AI, an intelligent code assistant embedded in a code editor. " +
-                "You help developers understand, navigate, and work with their codebase. " +
-                "Be concise, helpful, and format your responses in Markdown. " +
-                "Use code blocks with language specifiers when showing code.\n\n" +
-                "Here is the codebase context:\n" + codebaseContext
+                "System: You are MindVex AI. Provide technical codebase analysis.\n" +
+                "Context: " + context
         ))));
-        contents.add(Map.of("role", "model", "parts", List.of(Map.of("text",
-                "I'm MindVex AI, ready to help you with your codebase. I have context about the repository structure, " +
-                "modules, and dependencies. How can I assist you?"
-        ))));
+        contents.add(Map.of("role", "model", "parts", List.of(Map.of("text", "Understood. I have the context."))));
 
-        // Add conversation history
         for (Map<String, String> msg : history) {
             String role = "user".equals(msg.get("role")) ? "user" : "model";
             contents.add(Map.of("role", role, "parts", List.of(Map.of("text", msg.getOrDefault("content", "")))));
         }
-
-        // Add current message
         contents.add(Map.of("role", "user", "parts", List.of(Map.of("text", message))));
 
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/" + (model != null ? model : "gemini-2.0-flash") + ":generateContent?key=" + apiKey;
+        
         try {
-            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiApiKey;
-
-            Map<String, Object> geminiBody = Map.of("contents", contents);
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-
-            ResponseEntity<Map> response = restTemplate.exchange(
-                    url, HttpMethod.POST, new HttpEntity<>(geminiBody, headers), Map.class
-            );
-
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, Map.of("contents", contents), Map.class);
             var candidates = (List<Map<String, Object>>) response.getBody().get("candidates");
-            if (candidates != null && !candidates.isEmpty()) {
-                var content = (Map<String, Object>) candidates.get(0).get("content");
-                var parts = (List<Map<String, Object>>) content.get("parts");
-                if (parts != null && !parts.isEmpty()) {
-                    String reply = (String) parts.get(0).get("text");
-                    return ResponseEntity.ok(Map.of(
-                            "reply", reply,
-                            "model", "gemini-2.0-flash",
-                            "contextFiles", allFiles.size(),
-                            "contextDeps", deps.size()
-                    ));
-                }
-            }
-
-            return ResponseEntity.ok(Map.of(
-                    "reply", "I couldn't generate a response. Please try rephrasing your question.",
-                    "model", "gemini-2.0-flash"
-            ));
-
+            var content = (Map<String, Object>) candidates.get(0).get("content");
+            var parts = (List<Map<String, Object>>) content.get("parts");
+            String reply = (String) parts.get(0).get("text");
+            return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
-            log.error("[McpChat] Gemini call failed: {}", e.getMessage());
-            return ResponseEntity.ok(Map.of(
-                    "reply", "⚠️ AI service temporarily unavailable: " + e.getMessage(),
-                    "model", "error"
-            ));
+            throw new RuntimeException("Gemini call failed: " + e.getMessage());
+        }
+    }
+
+    private ResponseEntity<Map<String, Object>> callOllama(String message, List<Map<String, String>> history, String model, String baseUrl, String context) {
+        String url = (baseUrl != null ? baseUrl : "http://localhost:11434") + "/api/chat";
+        
+        List<Map<String, String>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", "You are MindVex AI. Context: " + context));
+        for (Map<String, String> msg : history) {
+            messages.add(Map.of("role", msg.get("role"), "content", msg.get("content")));
+        }
+        messages.add(Map.of("role", "user", "content", message));
+
+        Map<String, Object> request = Map.of(
+            "model", model != null ? model : "llama3",
+            "messages", messages,
+            "stream", false
+        );
+
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
+            String reply = (String) ((Map<String, Object>) response.getBody().get("message")).get("content");
+            return ResponseEntity.ok(Map.of("reply", reply, "model", model));
+        } catch (Exception e) {
+            throw new RuntimeException("Ollama call failed: " + e.getMessage());
+        }
+    }
+
+    private ResponseEntity<Map<String, Object>> callAnthropic(String message, List<Map<String, String>> history, String model, String apiKey, String context) {
+        if (apiKey == null || apiKey.isEmpty()) {
+            return ResponseEntity.ok(Map.of("reply", "⚠️ Anthropic API key not configured.", "model", "error"));
+        }
+
+        String url = "https://api.anthropic.com/v1/messages";
+        
+        List<Map<String, String>> messages = new ArrayList<>();
+        for (Map<String, String> msg : history) {
+            messages.add(Map.of("role", msg.get("role"), "content", msg.get("content")));
+        }
+        messages.add(Map.of("role", "user", "content", message));
+
+        Map<String, Object> request = Map.of(
+            "model", model != null ? model : "claude-3-5-sonnet-20240620",
+            "system", "You are MindVex AI. Context: " + context,
+            "messages", messages,
+            "max_tokens", 4096
+        );
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("x-api-key", apiKey);
+        headers.set("anthropic-version", "2023-06-01");
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        try {
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class);
+            String reply = (String) ((Map<String, Object>) ((List) response.getBody().get("content")).get(0)).get("text");
+            return ResponseEntity.ok(Map.of("reply", reply, "model", model));
+        } catch (Exception e) {
+            throw new RuntimeException("Anthropic call failed: " + e.getMessage());
+        }
+    }
+
+    private ResponseEntity<Map<String, Object>> callOpenAILike(String provider, String message, List<Map<String, String>> history, String model, String apiKey, String baseUrl, String context) {
+        if (apiKey == null || apiKey.isEmpty()) {
+            return ResponseEntity.ok(Map.of("reply", "⚠️ " + provider + " API key not configured.", "model", "error"));
+        }
+
+        String url;
+        if ("Groq".equals(provider)) url = "https://api.groq.com/openai/v1/chat/completions";
+        else if ("XAI".equals(provider)) url = "https://api.x.ai/v1/chat/completions";
+        else if ("OpenAI".equals(provider)) url = "https://api.openai.com/v1/chat/completions";
+        else url = baseUrl + "/v1/chat/completions";
+
+        List<Map<String, String>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", "You are MindVex AI. Context: " + context));
+        for (Map<String, String> msg : history) {
+            messages.add(Map.of("role", msg.get("role"), "content", msg.get("content")));
+        }
+        messages.add(Map.of("role", "user", "content", message));
+
+        Map<String, Object> request = Map.of(
+            "model", model,
+            "messages", messages
+        );
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(apiKey);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        try {
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class);
+            String reply = (String) ((Map<String, Object>) ((Map<String, Object>) ((List) response.getBody().get("choices")).get(0)).get("message")).get("content");
+            return ResponseEntity.ok(Map.of("reply", reply, "model", model));
+        } catch (Exception e) {
+            throw new RuntimeException(provider + " call failed: " + e.getMessage());
         }
     }
 
