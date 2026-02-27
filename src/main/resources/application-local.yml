@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mindvex
+    username: mindvex
+    password: mindvex_password
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+cors:
+  allowed-origins-str: "http://localhost:5173,http://localhost:8080,http://127.0.0.1:5173"

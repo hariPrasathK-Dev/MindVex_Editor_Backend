@@ -70,9 +70,12 @@ public class SourceCodeDependencyExtractor {
         Path tempDir = Files.createTempDirectory("mindvex-graph-");
 
         try {
-            log.info("[SourceCodeDepExtractor] Cloning {} into {}", repoUrl, tempDir);
+            // Normalize and validate the incoming repo URL
+            String normalizedUrl = normalizeRepoUrl(repoUrl);
+            log.info("[SourceCodeDepExtractor] Normalized repo URL: {}", normalizedUrl);
+            log.info("[SourceCodeDepExtractor] Cloning {} into {}", normalizedUrl, tempDir);
             Git.cloneRepository()
-                    .setURI(repoUrl)
+                    .setURI(normalizedUrl)
                     .setDirectory(tempDir.toFile())
                     .setDepth(1) // shallow clone for speed
                     .call();
@@ -283,5 +286,28 @@ public class SourceCodeDependencyExtractor {
         } catch (IOException e) {
             log.warn("[SourceCodeDepExtractor] Failed to clean up temp dir: {}", dir, e);
         }
+    }
+
+    /**
+     * Normalize and validate a repository URL. Accepts https and git SSH forms.
+     */
+    private String normalizeRepoUrl(String repoUrl) throws IOException {
+        if (repoUrl == null || repoUrl.isBlank()) {
+            throw new IOException("Invalid repository URL: empty");
+        }
+
+        String u = repoUrl.trim();
+        // strip trailing slash
+        if (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+
+        // Accept https://github.com/owner/repo or git@github.com:owner/repo(.git)
+        boolean httpsForm = u.matches("(?i)^https?://github\\.com/[^/]+/[^/]+(?:\\.git)?$");
+        boolean sshForm = u.matches("(?i)^git@github\\.com:[^/]+/[^/]+(?:\\.git)?$");
+
+        if (!httpsForm && !sshForm) {
+            throw new IOException("Invalid repository URL: expected https://github.com/{owner}/{repo}");
+        }
+
+        return u;
     }
 }
