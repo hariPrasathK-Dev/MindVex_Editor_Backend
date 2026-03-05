@@ -43,6 +43,7 @@ public class IndexJobWorker {
     private final IndexJobRepository indexJobRepository;
     private final ScipIngestionService scipIngestionService;
     private final SourceCodeDependencyExtractor sourceCodeDependencyExtractor;
+    private final EmbeddingIngestionService embeddingIngestionService;
     private final JGitMiningService jgitMiningService;
     private final ChurnCalculationEngine churnEngine;
     private final UserRepository userRepository;
@@ -90,8 +91,8 @@ public class IndexJobWorker {
     }
 
     /**
-     * graph_build: clone the repo, parse imports, save file dependency edges.
-     * No SCIP CLI tools required — uses regex-based import extraction.
+     * graph_build: clone the repo, parse imports, save file dependency edges, and generate embeddings.
+     * No SCIP CLI tools required — uses regex-based import extraction + Gemini embeddings.
      */
     private void processGraphBuild(IndexJob job) throws Exception {
         log.info("[IndexJobWorker] Starting graph_build for repo={}", job.getRepoUrl());
@@ -99,11 +100,21 @@ public class IndexJobWorker {
         // Fetch user's GitHub access token for private repository support
         String accessToken = getUserGithubToken(job.getUserId());
 
+        // Step 1: Extract dependency graph
         int edgeCount = sourceCodeDependencyExtractor.extractFromRepo(
                 job.getUserId(),
                 job.getRepoUrl(),
                 accessToken);
-        log.info("[IndexJobWorker] graph_build done: {} edges extracted for {}", edgeCount, job.getRepoUrl());
+        log.info("[IndexJobWorker] Dependency extraction done: {} edges extracted for {}", edgeCount, job.getRepoUrl());
+
+        // Step 2: Generate vector embeddings for semantic search
+        int embeddingCount = embeddingIngestionService.extractAndIngestRepo(
+                job.getUserId(),
+                job.getRepoUrl(),
+                accessToken);
+        log.info("[IndexJobWorker] Embedding generation done: {} chunks embedded for {}", embeddingCount, job.getRepoUrl());
+
+        log.info("[IndexJobWorker] graph_build completed successfully for {}", job.getRepoUrl());
     }
 
     /**
