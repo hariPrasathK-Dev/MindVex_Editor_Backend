@@ -39,3 +39,7 @@ build/
 ### Logs ###
 *.log
 logs/
+
+### Database Query Tools ###
+QueryDatabase.java
+QueryDatabase.class

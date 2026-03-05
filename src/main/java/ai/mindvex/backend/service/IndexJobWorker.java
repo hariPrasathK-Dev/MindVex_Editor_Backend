@@ -91,8 +91,10 @@ public class IndexJobWorker {
     }
 
     /**
-     * graph_build: clone the repo, parse imports, save file dependency edges, and generate embeddings.
-     * No SCIP CLI tools required — uses regex-based import extraction + Gemini embeddings.
+     * graph_build: clone the repo, parse imports, save file dependency edges, and
+     * generate embeddings.
+     * No SCIP CLI tools required — uses regex-based import extraction + Gemini
+     * embeddings.
      */
     private void processGraphBuild(IndexJob job) throws Exception {
         log.info("[IndexJobWorker] Starting graph_build for repo={}", job.getRepoUrl());
@@ -112,7 +114,8 @@ public class IndexJobWorker {
                 job.getUserId(),
                 job.getRepoUrl(),
                 accessToken);
-        log.info("[IndexJobWorker] Embedding generation done: {} chunks embedded for {}", embeddingCount, job.getRepoUrl());
+        log.info("[IndexJobWorker] Embedding generation done: {} chunks embedded for {}", embeddingCount,
+                job.getRepoUrl());
 
         log.info("[IndexJobWorker] graph_build completed successfully for {}", job.getRepoUrl());
     }

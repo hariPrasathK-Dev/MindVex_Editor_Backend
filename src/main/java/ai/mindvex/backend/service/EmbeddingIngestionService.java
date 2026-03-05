@@ -25,7 +25,8 @@ import java.util.stream.Collectors;
  * 1. Walk the cloned repo directory for source files
  * 2. Chunk each file into ~50 line segments
  * 3. Call Gemini embedding API to generate 768-dim vectors
- * 4. Store (file_path, chunk_index, chunk_text, embedding) in vector_embeddings table
+ * 4. Store (file_path, chunk_index, chunk_text, embedding) in vector_embeddings
+ * table
  */
 @Service
 @RequiredArgsConstructor
@@ -41,11 +42,9 @@ public class EmbeddingIngestionService {
     private static final int CHUNK_SIZE_LINES = 50;
     private static final Set<String> SOURCE_EXTENSIONS = Set.of(
             ".ts", ".tsx", ".js", ".jsx", ".py", ".java", ".kt", ".go",
-            ".rs", ".cs", ".cpp", ".c", ".h", ".rb", ".swift", ".md"
-    );
+            ".rs", ".cs", ".cpp", ".c", ".h", ".rb", ".swift", ".md");
     private static final Set<String> SKIP_DIRS = Set.of(
-            "node_modules", ".git", "dist", "build", "target", "__pycache__", "vendor"
-    );
+            "node_modules", ".git", "dist", "build", "target", "__pycache__", "vendor");
 
     /**
      * Ingest a cloned repo directory into vector embeddings.
@@ -231,7 +230,8 @@ public class EmbeddingIngestionService {
      */
     public List<VectorEmbedding> semanticSearch(Long userId, String repoUrl, String query, int topK) {
         String queryEmbedding = generateEmbedding(query);
-        if (queryEmbedding == null) return Collections.emptyList();
+        if (queryEmbedding == null)
+            return Collections.emptyList();
         try {
             return embeddingRepo.findSimilar(userId, repoUrl, queryEmbedding, topK);
         } catch (Exception e) {
@@ -276,19 +276,19 @@ public class EmbeddingIngestionService {
 
     @SuppressWarnings("unchecked")
     private String callGeminiEmbeddingApi(String text) {
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=" + geminiApiKey;
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key="
+                + geminiApiKey;
 
         Map<String, Object> body = Map.of(
                 "model", "models/text-embedding-004",
-                "content", Map.of("parts", List.of(Map.of("text", text.length() > 2000 ? text.substring(0, 2000) : text)))
-        );
+                "content",
+                Map.of("parts", List.of(Map.of("text", text.length() > 2000 ? text.substring(0, 2000) : text))));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         ResponseEntity<Map> response = restTemplate.exchange(
-                url, HttpMethod.POST, new HttpEntity<>(body, headers), Map.class
-        );
+                url, HttpMethod.POST, new HttpEntity<>(body, headers), Map.class);
 
         Map<String, Object> embedding = (Map<String, Object>) response.getBody().get("embedding");
         List<Double> values = (List<Double>) embedding.get("values");
@@ -305,11 +305,13 @@ public class EmbeddingIngestionService {
         }
         // Normalize
         float norm = 0;
-        for (float v : vec) norm += v * v;
+        for (float v : vec)
+            norm += v * v;
         norm = (float) Math.sqrt(norm);
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < 768; i++) {
-            if (i > 0) sb.append(",");
+            if (i > 0)
+                sb.append(",");
             sb.append(String.format("%.6f", vec[i] / norm));
         }
         sb.append("]");
