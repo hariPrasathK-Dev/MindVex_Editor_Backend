@@ -75,19 +75,19 @@ public class LivingWikiService {
         if (embeddingCount > 0) {
             try {
                 log.info("[LivingWiki] Retrieving semantic context via embeddings (count={})", embeddingCount);
-                
+
                 // Multi-aspect semantic search for comprehensive understanding
                 String[] queries = {
-                    "main entry point, startup, initialization, configuration",
-                    "API endpoints, routes, controllers, request handlers",
-                    "data models, entities, database schema, repositories",
-                    "business logic, services, core functionality, algorithms",
-                    "authentication, authorization, security, validation"
+                        "main entry point, startup, initialization, configuration",
+                        "API endpoints, routes, controllers, request handlers",
+                        "data models, entities, database schema, repositories",
+                        "business logic, services, core functionality, algorithms",
+                        "authentication, authorization, security, validation"
                 };
-                
+
                 Set<String> seenChunks = new HashSet<>();
                 int totalChunks = 0;
-                
+
                 for (String query : queries) {
                     try {
                         List<VectorEmbedding> chunks = embeddingService.semanticSearch(userId, repoUrl, query, 5);
@@ -96,8 +96,8 @@ public class LivingWikiService {
                             if (!seenChunks.contains(chunkId)) {
                                 seenChunks.add(chunkId);
                                 semanticContext.append("\n// ").append(chunk.getFilePath())
-                                    .append(" (chunk ").append(chunk.getChunkIndex()).append(")\n")
-                                    .append(chunk.getChunkText()).append("\n");
+                                        .append(" (chunk ").append(chunk.getChunkIndex()).append(")\n")
+                                        .append(chunk.getChunkText()).append("\n");
                                 totalChunks++;
                             }
                         }
@@ -105,7 +105,7 @@ public class LivingWikiService {
                         log.warn("[LivingWiki] Semantic search failed for query '{}': {}", query, e.getMessage());
                     }
                 }
-                
+
                 log.info("[LivingWiki] Retrieved {} unique code chunks for semantic context", totalChunks);
             } catch (Exception e) {
                 log.warn("[LivingWiki] Could not retrieve semantic context: {}", e.getMessage());

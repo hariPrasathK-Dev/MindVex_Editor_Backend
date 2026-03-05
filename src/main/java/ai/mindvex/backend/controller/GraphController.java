@@ -227,9 +227,9 @@ public class GraphController {
                             "filePath", r.getFilePath(),
                             "nodeId", nodeId(r.getFilePath()),
                             "chunkIndex", r.getChunkIndex(),
-                            "preview", r.getChunkText().length() > 200 
-                                ? r.getChunkText().substring(0, 200) + "..." 
-                                : r.getChunkText()))
+                            "preview", r.getChunkText().length() > 200
+                                    ? r.getChunkText().substring(0, 200) + "..."
+                                    : r.getChunkText()))
                     .collect(Collectors.toList());
 
             return ResponseEntity.ok(Map.of(
@@ -364,4 +364,3 @@ public class GraphController {
         return "unknown";
     }
 }
-
