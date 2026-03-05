@@ -19,8 +19,11 @@ import java.util.Optional;
  *
  * When a graph_build job is found, it uses SourceCodeDependencyExtractor to
  * clone the repo, parse import statements, and populate file_dependencies.
+ *
+ * DISABLED: IndexJobWorker now handles graph_build jobs with full embedding support.
+ * Keeping this class for reference but not active.
  */
-@Component
+//@Component  // DISABLED to prevent race condition with IndexJobWorker
 @RequiredArgsConstructor
 @Slf4j
 public class GraphJobWorker {

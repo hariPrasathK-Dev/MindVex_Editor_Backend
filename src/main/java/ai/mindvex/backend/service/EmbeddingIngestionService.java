@@ -4,6 +4,8 @@ import ai.mindvex.backend.entity.VectorEmbedding;
 import ai.mindvex.backend.repository.VectorEmbeddingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -125,6 +127,103 @@ public class EmbeddingIngestionService {
 
         log.info("[EmbeddingIngestion] Ingested {} chunks for {}", totalChunks, repoUrl);
         return totalChunks;
+    }
+
+    /**
+     * Clone a repository and ingest embeddings.
+     * Handles cloning with authentication and cleanup.
+     *
+     * @param userId      the owning user
+     * @param repoUrl     repository URL
+     * @param accessToken GitHub access token (may be null for public repos)
+     * @return number of chunks embedded
+     */
+    @Transactional
+    public int extractAndIngestRepo(Long userId, String repoUrl, String accessToken) throws IOException {
+        log.info("[EmbeddingIngestion] Cloning and ingesting embeddings for user={} repo={}", userId, repoUrl);
+
+        Path tempDir = Files.createTempDirectory("mindvex-embeddings-");
+
+        try {
+            // Normalize repo URL
+            String normalizedUrl = normalizeRepoUrl(repoUrl);
+            log.info("[EmbeddingIngestion] Cloning {} into {}", normalizedUrl, tempDir);
+
+            var cloneCmd = Git.cloneRepository()
+                    .setURI(normalizedUrl)
+                    .setDirectory(tempDir.toFile())
+                    .setDepth(1); // shallow clone for speed
+
+            // Add GitHub authentication if access token is provided
+            if (accessToken != null && !accessToken.isBlank()) {
+                log.info("[EmbeddingIngestion] Using GitHub authentication for private repository");
+                cloneCmd.setCredentialsProvider(new UsernamePasswordCredentialsProvider("oauth2", accessToken));
+            }
+
+            cloneCmd.call();
+
+            // Ingest embeddings from the cloned repository
+            return ingestRepo(userId, repoUrl, tempDir);
+
+        } catch (Exception e) {
+            log.error("[EmbeddingIngestion] Failed to clone and ingest {}: {}", repoUrl, e.getMessage(), e);
+            throw new IOException("Failed to generate embeddings: " + e.getMessage(), e);
+        } finally {
+            // Clean up temp directory
+            deleteRecursively(tempDir);
+        }
+    }
+
+    /**
+     * Normalize repository URL to HTTPS format.
+     */
+    private String normalizeRepoUrl(String repoUrl) {
+        if (repoUrl == null || repoUrl.isBlank()) {
+            throw new IllegalArgumentException("Repository URL cannot be null or empty");
+        }
+
+        // If it's already an HTTPS URL, return as is
+        if (repoUrl.startsWith("https://")) {
+            return repoUrl.endsWith(".git") ? repoUrl : repoUrl + ".git";
+        }
+
+        // If it's a git@ SSH URL, convert to HTTPS
+        if (repoUrl.startsWith("git@github.com:")) {
+            String path = repoUrl.substring("git@github.com:".length());
+            if (path.endsWith(".git")) {
+                return "https://github.com/" + path;
+            }
+            return "https://github.com/" + path + ".git";
+        }
+
+        // If it's just owner/repo format, assume GitHub
+        if (repoUrl.matches("^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$")) {
+            return "https://github.com/" + repoUrl + ".git";
+        }
+
+        // Otherwise, try to use as-is
+        return repoUrl;
+    }
+
+    /**
+     * Delete directory recursively.
+     */
+    private void deleteRecursively(Path path) {
+        try {
+            if (Files.exists(path)) {
+                Files.walk(path)
+                        .sorted(Comparator.reverseOrder())
+                        .forEach(p -> {
+                            try {
+                                Files.delete(p);
+                            } catch (IOException e) {
+                                log.warn("[EmbeddingIngestion] Failed to delete {}: {}", p, e.getMessage());
+                            }
+                        });
+            }
+        } catch (IOException e) {
+            log.warn("[EmbeddingIngestion] Failed to clean up {}: {}", path, e.getMessage());
+        }
     }
 
     /**
