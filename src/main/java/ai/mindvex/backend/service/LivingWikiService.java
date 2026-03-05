@@ -69,6 +69,49 @@ public class LivingWikiService {
             log.warn("[LivingWiki] Could not load embedding count (table may not exist yet): {}", e.getMessage());
         }
 
+        // ─── Semantic Context Retrieval ─────────────────────────────────────
+        // Use embeddings to gather rich semantic context for documentation
+        StringBuilder semanticContext = new StringBuilder();
+        if (embeddingCount > 0) {
+            try {
+                log.info("[LivingWiki] Retrieving semantic context via embeddings (count={})", embeddingCount);
+                
+                // Multi-aspect semantic search for comprehensive understanding
+                String[] queries = {
+                    "main entry point, startup, initialization, configuration",
+                    "API endpoints, routes, controllers, request handlers",
+                    "data models, entities, database schema, repositories",
+                    "business logic, services, core functionality, algorithms",
+                    "authentication, authorization, security, validation"
+                };
+                
+                Set<String> seenChunks = new HashSet<>();
+                int totalChunks = 0;
+                
+                for (String query : queries) {
+                    try {
+                        List<VectorEmbedding> chunks = embeddingService.semanticSearch(userId, repoUrl, query, 5);
+                        for (VectorEmbedding chunk : chunks) {
+                            String chunkId = chunk.getFilePath() + ":" + chunk.getChunkIndex();
+                            if (!seenChunks.contains(chunkId)) {
+                                seenChunks.add(chunkId);
+                                semanticContext.append("\n// ").append(chunk.getFilePath())
+                                    .append(" (chunk ").append(chunk.getChunkIndex()).append(")\n")
+                                    .append(chunk.getChunkText()).append("\n");
+                                totalChunks++;
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("[LivingWiki] Semantic search failed for query '{}': {}", query, e.getMessage());
+                    }
+                }
+                
+                log.info("[LivingWiki] Retrieved {} unique code chunks for semantic context", totalChunks);
+            } catch (Exception e) {
+                log.warn("[LivingWiki] Could not retrieve semantic context: {}", e.getMessage());
+            }
+        }
+
         // Build a structural summary
         StringBuilder context = new StringBuilder();
         context.append("Repository: ").append(repoUrl).append("\n");
@@ -88,6 +131,12 @@ public class LivingWikiService {
                     context.append("  - ... and ").append(entry.getValue().size() - 5).append(" more\n");
                 }
             }
+        }
+
+        // Append semantic code context if available
+        if (semanticContext.length() > 0) {
+            context.append("\nRelevant Code Samples (from semantic analysis):\n");
+            context.append(semanticContext.toString());
         }
 
         if (provider != null) {
