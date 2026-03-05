@@ -69,10 +69,8 @@ public class McpController {
                         Map.of("type", "semantic_search", "description", "Vector similarity search over code chunks"),
                         Map.of("type", "wiki", "description", "AI-generated project documentation"),
                         Map.of("type", "module_description", "description", "Detailed module-level descriptions"),
-                        Map.of("type", "ai_chat", "description", "Gemini-powered code chat assistant")
-                ),
-                "tools", List.of("search", "deps", "wiki", "describe", "chat")
-        ));
+                        Map.of("type", "ai_chat", "description", "Gemini-powered code chat assistant")),
+                "tools", List.of("search", "deps", "wiki", "describe", "chat")));
     }
 
     // ─── Tool: Semantic Search ──────────────────────────────────────────────
@@ -92,14 +90,12 @@ public class McpController {
         List<Map<String, Object>> matches = results.stream().map(r -> Map.<String, Object>of(
                 "filePath", r.getFilePath(),
                 "chunkIndex", r.getChunkIndex(),
-                "content", r.getChunkText()
-        )).collect(Collectors.toList());
+                "content", r.getChunkText())).collect(Collectors.toList());
 
         return ResponseEntity.ok(Map.of(
                 "query", query,
                 "results", matches,
-                "totalMatches", results.size()
-        ));
+                "totalMatches", results.size()));
     }
 
     // ─── Tool: Dependency Tree ──────────────────────────────────────────────
@@ -122,15 +118,13 @@ public class McpController {
                     .map(d -> Map.<String, String>of(
                             "source", d.getSourceFile(),
                             "target", d.getTargetFile(),
-                            "type", d.getDepType()
-                    ))
+                            "type", d.getDepType()))
                     .collect(Collectors.toList());
 
             return ResponseEntity.ok(Map.of(
                     "file", filePath,
                     "dependencies", fileDeps,
-                    "count", fileDeps.size()
-            ));
+                    "count", fileDeps.size()));
         }
 
         // Return full graph summary
@@ -139,8 +133,7 @@ public class McpController {
                 "files", allDeps.stream()
                         .flatMap(d -> List.of(d.getSourceFile(), d.getTargetFile()).stream())
                         .distinct()
-                        .collect(Collectors.toList())
-        ));
+                        .collect(Collectors.toList())));
     }
 
     // ─── Tool: Wiki Generation ──────────────────────────────────────────────
@@ -148,16 +141,30 @@ public class McpController {
     @PostMapping("/tools/wiki")
     public ResponseEntity<Map<String, Object>> generateWiki(
             @RequestParam String repoUrl,
+            @RequestBody(required = false) Map<String, Object> body,
             Authentication authentication) {
 
         Long userId = extractUserId(authentication);
-        String wiki = wikiService.generateWiki(userId, repoUrl);
 
-        return ResponseEntity.ok(Map.of(
-                "repoUrl", repoUrl,
-                "content", wiki,
-                "format", "markdown"
-        ));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> provider = body != null ? (Map<String, Object>) body.get("provider") : null;
+
+        log.info("[Wiki] Generating for repo={} provider={}", repoUrl,
+                provider != null ? provider.get("name") : "none");
+
+        try {
+            Map<String, String> wikiFiles = wikiService.generateWiki(userId, repoUrl, provider);
+            return ResponseEntity.ok(Map.of(
+                    "repoUrl", repoUrl,
+                    "content", wikiFiles,
+                    "format", "multiple-files"));
+        } catch (Exception e) {
+            log.error("[Wiki] Generation failed: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).body(Map.of(
+                    "error", "Wiki generation failed",
+                    "message", e.getMessage() != null ? e.getMessage() : "Unknown error",
+                    "repoUrl", repoUrl));
+        }
     }
 
     // ─── Tool: Module Description ───────────────────────────────────────────
@@ -171,13 +178,15 @@ public class McpController {
         Long userId = extractUserId(authentication);
         String modulePath = (String) body.getOrDefault("module", "");
 
-        String description = wikiService.describeModule(userId, repoUrl, modulePath);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> provider = (Map<String, Object>) body.get("provider");
+
+        String description = wikiService.describeModule(userId, repoUrl, modulePath, provider);
 
         return ResponseEntity.ok(Map.of(
                 "module", modulePath,
                 "description", description,
-                "format", "markdown"
-        ));
+                "format", "markdown"));
     }
 
     // ─── Tool: AI Chat ──────────────────────────────────────────────────────
@@ -208,8 +217,7 @@ public class McpController {
                 repoUrl,
                 allFiles.size(),
                 deps.size(),
-                allFiles.stream().limit(20).collect(Collectors.joining(", "))
-        );
+                allFiles.stream().limit(20).collect(Collectors.joining(", ")));
 
         // ─── Provider Selection ─────────────────────────────────────────────────
 
@@ -223,7 +231,8 @@ public class McpController {
                 if ("Ollama".equals(providerName)) {
                     return callOllama(message, history, model, baseUrl, codebaseContext);
                 } else if ("LMStudio".equals(providerName)) {
-                    return callOpenAILike(providerName, message, history, model, baseUrl != null ? baseUrl : "http://localhost:1234", apiKey, codebaseContext);
+                    return callOpenAILike(providerName, message, history, model,
+                            baseUrl != null ? baseUrl : "http://localhost:1234", apiKey, codebaseContext);
                 } else if ("Anthropic".equals(providerName)) {
                     return callAnthropic(message, history, model, apiKey, codebaseContext);
                 } else if ("Groq".equals(providerName) || "OpenAI".equals(providerName) || "XAI".equals(providerName)) {
@@ -235,8 +244,7 @@ public class McpController {
                 log.error("[McpChat] {} call failed: {}", providerName, e.getMessage());
                 return ResponseEntity.ok(Map.of(
                         "reply", "⚠️ AI service (" + providerName + ") unavailable: " + e.getMessage(),
-                        "model", "error"
-                ));
+                        "model", "error"));
             }
         }
 
@@ -244,7 +252,8 @@ public class McpController {
         return callGemini(message, history, "gemini-2.0-flash", geminiApiKey, codebaseContext);
     }
 
-    private ResponseEntity<Map<String, Object>> callGemini(String message, List<Map<String, String>> history, String model, String apiKey, String context) {
+    private ResponseEntity<Map<String, Object>> callGemini(String message, List<Map<String, String>> history,
+            String model, String apiKey, String context) {
         if (apiKey == null || apiKey.isEmpty()) {
             return ResponseEntity.ok(Map.of("reply", "⚠️ Google API key not configured.", "model", "error"));
         }
@@ -252,8 +261,7 @@ public class McpController {
         List<Map<String, Object>> contents = new ArrayList<>();
         contents.add(Map.of("role", "user", "parts", List.of(Map.of("text",
                 "System: You are MindVex AI. Provide technical codebase analysis.\n" +
-                "Context: " + context
-        ))));
+                        "Context: " + context))));
         contents.add(Map.of("role", "model", "parts", List.of(Map.of("text", "Understood. I have the context."))));
 
         for (Map<String, String> msg : history) {
@@ -262,8 +270,9 @@ public class McpController {
         }
         contents.add(Map.of("role", "user", "parts", List.of(Map.of("text", message))));
 
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/" + (model != null ? model : "gemini-2.0-flash") + ":generateContent?key=" + apiKey;
-        
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + (model != null ? model : "gemini-2.0-flash") + ":generateContent?key=" + apiKey;
+
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(url, Map.of("contents", contents), Map.class);
             var candidates = (List<Map<String, Object>>) response.getBody().get("candidates");
@@ -276,9 +285,10 @@ public class McpController {
         }
     }
 
-    private ResponseEntity<Map<String, Object>> callOllama(String message, List<Map<String, String>> history, String model, String baseUrl, String context) {
+    private ResponseEntity<Map<String, Object>> callOllama(String message, List<Map<String, String>> history,
+            String model, String baseUrl, String context) {
         String url = (baseUrl != null ? baseUrl : "http://localhost:11434") + "/api/chat";
-        
+
         List<Map<String, String>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", "You are MindVex AI. Context: " + context));
         for (Map<String, String> msg : history) {
@@ -287,10 +297,9 @@ public class McpController {
         messages.add(Map.of("role", "user", "content", message));
 
         Map<String, Object> request = Map.of(
-            "model", model != null ? model : "llama3",
-            "messages", messages,
-            "stream", false
-        );
+                "model", model != null ? model : "llama3",
+                "messages", messages,
+                "stream", false);
 
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
@@ -301,13 +310,14 @@ public class McpController {
         }
     }
 
-    private ResponseEntity<Map<String, Object>> callAnthropic(String message, List<Map<String, String>> history, String model, String apiKey, String context) {
+    private ResponseEntity<Map<String, Object>> callAnthropic(String message, List<Map<String, String>> history,
+            String model, String apiKey, String context) {
         if (apiKey == null || apiKey.isEmpty()) {
             return ResponseEntity.ok(Map.of("reply", "⚠️ Anthropic API key not configured.", "model", "error"));
         }
 
         String url = "https://api.anthropic.com/v1/messages";
-        
+
         List<Map<String, String>> messages = new ArrayList<>();
         for (Map<String, String> msg : history) {
             messages.add(Map.of("role", msg.get("role"), "content", msg.get("content")));
@@ -315,11 +325,10 @@ public class McpController {
         messages.add(Map.of("role", "user", "content", message));
 
         Map<String, Object> request = Map.of(
-            "model", model != null ? model : "claude-3-5-sonnet-20240620",
-            "system", "You are MindVex AI. Context: " + context,
-            "messages", messages,
-            "max_tokens", 4096
-        );
+                "model", model != null ? model : "claude-3-5-sonnet-20240620",
+                "system", "You are MindVex AI. Context: " + context,
+                "messages", messages,
+                "max_tokens", 4096);
 
         HttpHeaders headers = new HttpHeaders();
         headers.set("x-api-key", apiKey);
@@ -327,24 +336,31 @@ public class McpController {
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         try {
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class);
-            String reply = (String) ((Map<String, Object>) ((List) response.getBody().get("content")).get(0)).get("text");
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST,
+                    new HttpEntity<>(request, headers), Map.class);
+            String reply = (String) ((Map<String, Object>) ((List) response.getBody().get("content")).get(0))
+                    .get("text");
             return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
             throw new RuntimeException("Anthropic call failed: " + e.getMessage());
         }
     }
 
-    private ResponseEntity<Map<String, Object>> callOpenAILike(String provider, String message, List<Map<String, String>> history, String model, String apiKey, String baseUrl, String context) {
+    private ResponseEntity<Map<String, Object>> callOpenAILike(String provider, String message,
+            List<Map<String, String>> history, String model, String apiKey, String baseUrl, String context) {
         if (apiKey == null || apiKey.isEmpty()) {
             return ResponseEntity.ok(Map.of("reply", "⚠️ " + provider + " API key not configured.", "model", "error"));
         }
 
         String url;
-        if ("Groq".equals(provider)) url = "https://api.groq.com/openai/v1/chat/completions";
-        else if ("XAI".equals(provider)) url = "https://api.x.ai/v1/chat/completions";
-        else if ("OpenAI".equals(provider)) url = "https://api.openai.com/v1/chat/completions";
-        else url = baseUrl + "/v1/chat/completions";
+        if ("Groq".equals(provider))
+            url = "https://api.groq.com/openai/v1/chat/completions";
+        else if ("XAI".equals(provider))
+            url = "https://api.x.ai/v1/chat/completions";
+        else if ("OpenAI".equals(provider))
+            url = "https://api.openai.com/v1/chat/completions";
+        else
+            url = baseUrl + "/v1/chat/completions";
 
         List<Map<String, String>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", "You are MindVex AI. Context: " + context));
@@ -354,17 +370,18 @@ public class McpController {
         messages.add(Map.of("role", "user", "content", message));
 
         Map<String, Object> request = Map.of(
-            "model", model,
-            "messages", messages
-        );
+                "model", model,
+                "messages", messages);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(apiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         try {
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class);
-            String reply = (String) ((Map<String, Object>) ((Map<String, Object>) ((List) response.getBody().get("choices")).get(0)).get("message")).get("content");
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST,
+                    new HttpEntity<>(request, headers), Map.class);
+            String reply = (String) ((Map<String, Object>) ((Map<String, Object>) ((List) response.getBody()
+                    .get("choices")).get(0)).get("message")).get("content");
             return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
             throw new RuntimeException(provider + " call failed: " + e.getMessage());

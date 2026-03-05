@@ -10,6 +10,9 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -38,23 +41,35 @@ public class LivingWikiService {
      * Generate a module-level wiki overview for a repository.
      * Returns Markdown-formatted content describing the project structure.
      */
-    public String generateWiki(Long userId, String repoUrl) {
+    public Map<String, String> generateWiki(Long userId, String repoUrl, Map<String, Object> provider) {
         log.info("[LivingWiki] Generating wiki for user={} repo={}", userId, repoUrl);
 
-        // Gather context from code intelligence tables
-        var deps = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
-        long embeddingCount = embeddingRepo.countByUserIdAndRepoUrl(userId, repoUrl);
-
-        // Build a structural summary
+        // Gather context from code intelligence tables — these may not exist yet
+        List<?> deps = List.of();
+        long embeddingCount = 0;
         Map<String, Set<String>> moduleFiles = new LinkedHashMap<>();
         Set<String> allFiles = new HashSet<>();
-        for (var dep : deps) {
-            allFiles.add(dep.getSourceFile());
-            allFiles.add(dep.getTargetFile());
-            String module = extractModule(dep.getSourceFile());
-            moduleFiles.computeIfAbsent(module, k -> new LinkedHashSet<>()).add(dep.getSourceFile());
+
+        try {
+            deps = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
+            for (var dep : deps) {
+                var d = (ai.mindvex.backend.entity.FileDependency) dep;
+                allFiles.add(d.getSourceFile());
+                allFiles.add(d.getTargetFile());
+                String module = extractModule(d.getSourceFile());
+                moduleFiles.computeIfAbsent(module, k -> new LinkedHashSet<>()).add(d.getSourceFile());
+            }
+        } catch (Exception e) {
+            log.warn("[LivingWiki] Could not load dependency graph (table may not exist yet): {}", e.getMessage());
         }
 
+        try {
+            embeddingCount = embeddingRepo.countByUserIdAndRepoUrl(userId, repoUrl);
+        } catch (Exception e) {
+            log.warn("[LivingWiki] Could not load embedding count (table may not exist yet): {}", e.getMessage());
+        }
+
+        // Build a structural summary
         StringBuilder context = new StringBuilder();
         context.append("Repository: ").append(repoUrl).append("\n");
         context.append("Total files: ").append(allFiles.size()).append("\n");
@@ -62,43 +77,164 @@ public class LivingWikiService {
         context.append("Total code chunks embedded: ").append(embeddingCount).append("\n\n");
         context.append("Module Structure:\n");
 
-        for (var entry : moduleFiles.entrySet()) {
-            context.append("- ").append(entry.getKey())
-                    .append(": ").append(entry.getValue().size()).append(" files\n");
-            // List first 5 files per module
-            entry.getValue().stream().limit(5).forEach(f ->
-                    context.append("  - ").append(f).append("\n"));
-            if (entry.getValue().size() > 5) {
-                context.append("  - ... and ").append(entry.getValue().size() - 5).append(" more\n");
+        if (moduleFiles.isEmpty()) {
+            context.append("(Repository has not been indexed yet — generating documentation from repo URL)\n");
+        } else {
+            for (var entry : moduleFiles.entrySet()) {
+                context.append("- ").append(entry.getKey())
+                        .append(": ").append(entry.getValue().size()).append(" files\n");
+                entry.getValue().stream().limit(5).forEach(f -> context.append("  - ").append(f).append("\n"));
+                if (entry.getValue().size() > 5) {
+                    context.append("  - ... and ").append(entry.getValue().size() - 5).append(" more\n");
+                }
+            }
+        }
+
+        if (provider != null) {
+            try {
+                String aiResponse = callAiForWiki(context.toString(), provider);
+                Map<String, String> files = parseResponse(aiResponse);
+                if (files.size() > 1)
+                    return files;
+                log.warn("[LivingWiki] Provider '{}' returned only 1 file, trying Gemini", provider.get("name"));
+            } catch (Exception e) {
+                log.warn("[LivingWiki] Provider '{}' failed: {}", provider.get("name"), e.getMessage());
             }
         }
 
         // Generate with Gemini if API key available
         if (geminiApiKey != null && !geminiApiKey.isBlank()) {
             try {
-                return callGeminiForWiki(context.toString());
+                return parseResponse(callGeminiForWiki(context.toString()));
             } catch (Exception e) {
-                log.warn("[LivingWiki] Gemini failed, returning structured summary: {}", e.getMessage());
+                log.warn("[LivingWiki] Gemini failed: {}", e.getMessage());
             }
         }
 
-        // Fallback: return the structured summary as markdown
-        return generateFallbackWiki(repoUrl, moduleFiles, allFiles.size(), deps.size());
+        // Static fallback
+        log.info("[LivingWiki] Using static fallback for repo={}", repoUrl);
+        return Map.of("README.md", generateFallbackWiki(repoUrl, moduleFiles, allFiles.size(), deps.size()));
+    }
+
+    private Map<String, String> parseResponse(String response) {
+        if (response == null || response.isBlank()) {
+            return Map.of("README.md", "No content generated.");
+        }
+
+        // ── Strategy 1: Delimiter format (===FILE: name===) ──────────────────
+        // This is the primary format we ask LLMs to use: 100% newline-safe.
+        String DELIM = "===FILE:";
+        if (response.contains(DELIM)) {
+            Map<String, String> files = new LinkedHashMap<>();
+            String[] sections = response.split("(?m)^===FILE:");
+            for (String section : sections) {
+                if (section.isBlank())
+                    continue;
+                int lineEnd = section.indexOf('\n');
+                if (lineEnd < 0)
+                    continue;
+                String filename = section.substring(0, lineEnd).replace("===", "").trim();
+                String content = section.substring(lineEnd + 1);
+                // Strip trailing delimiter line or markdown fence if present
+                if (content.endsWith("==="))
+                    content = content.substring(0, content.lastIndexOf("==="));
+                content = content.trim();
+                if (!filename.isBlank() && !content.isBlank()) {
+                    files.put(filename, content);
+                }
+            }
+            if (files.size() > 1) {
+                log.info("[LivingWiki] Parsed {} files via delimiter format", files.size());
+                return files;
+            }
+        }
+
+        // ── Strategy 2: JSON parsing (try several sub-strategies) ────────────
+        ObjectMapper mapper = new ObjectMapper();
+        String[] candidates = {
+                response.trim(),
+                // Strip ```json ... ``` fences
+                response.trim().replaceAll("(?s)^```(?:json)?\\s*", "").replaceAll("```\\s*$", "").trim()
+        };
+        for (String candidate : candidates) {
+            // Find outermost { ... }
+            int fb = candidate.indexOf('{');
+            int lb = candidate.lastIndexOf('}');
+            if (fb >= 0 && lb > fb) {
+                try {
+                    Map<String, String> result = mapper.readValue(
+                            candidate.substring(fb, lb + 1),
+                            new TypeReference<Map<String, String>>() {
+                            });
+                    if (result.size() > 1) {
+                        log.info("[LivingWiki] Parsed {} files via JSON", result.size());
+                        return result;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        log.warn("[LivingWiki] All parse strategies failed, using raw content as README.md (len={})",
+                response.length());
+        return Map.of("README.md", response);
+    }
+
+    // repairTruncatedJson kept for legacy JSON fallback
+    @SuppressWarnings("unused")
+    private String repairTruncatedJson(String json) {
+        int open = 0;
+        boolean inString = false;
+        boolean escape = false;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (c == '{')
+                    open++;
+                else if (c == '}')
+                    open--;
+            }
+        }
+        StringBuilder sb = new StringBuilder(json);
+        if (inString)
+            sb.append('"');
+        for (int i = 0; i < open; i++)
+            sb.append('}');
+        return sb.toString();
     }
 
     /**
      * Generate a description for a specific module/directory.
      */
-    public String describeModule(Long userId, String repoUrl, String modulePath) {
+    public String describeModule(Long userId, String repoUrl, String modulePath, Map<String, Object> provider) {
         // Find relevant code chunks
         List<VectorEmbedding> chunks = embeddingService.semanticSearch(
-                userId, repoUrl, "What does the " + modulePath + " module do?", 5
-        );
+                userId, repoUrl, "What does the " + modulePath + " module do?", 5);
 
         if (!chunks.isEmpty()) {
             String codeContext = chunks.stream()
                     .map(c -> "// " + c.getFilePath() + " (chunk " + c.getChunkIndex() + ")\n" + c.getChunkText())
                     .collect(Collectors.joining("\n\n"));
+
+            if (provider != null) {
+                try {
+                    return callAiForModuleDescription(modulePath, codeContext, provider);
+                } catch (Exception e) {
+                    log.warn("[LivingWiki] Provider failed for module description: {}", e.getMessage());
+                }
+            }
 
             if (geminiApiKey != null && !geminiApiKey.isBlank()) {
                 try {
@@ -109,7 +245,8 @@ public class LivingWikiService {
             }
 
             return "## " + modulePath + "\n\nThis module contains " + chunks.size() + " code chunks.\n\n"
-                    + "Files:\n" + chunks.stream().map(c -> "- " + c.getFilePath()).distinct().collect(Collectors.joining("\n"));
+                    + "Files:\n"
+                    + chunks.stream().map(c -> "- " + c.getFilePath()).distinct().collect(Collectors.joining("\n"));
         }
 
         // Fallback: use file dependency data to describe the module
@@ -122,7 +259,8 @@ public class LivingWikiService {
                 .collect(Collectors.toList());
 
         if (moduleFiles.isEmpty()) {
-            return "No data found for module: **" + modulePath + "**. Make sure the repository has been analyzed via Analytics → Mine first.";
+            return "No data found for module: **" + modulePath
+                    + "**. Make sure the repository has been analyzed via Analytics → Mine first.";
         }
 
         // Build context from dependency data
@@ -139,6 +277,14 @@ public class LivingWikiService {
             fileDeps.forEach(fd -> context.append("  ").append(fd).append("\n"));
         }
 
+        if (provider != null) {
+            try {
+                return callAiForModuleDescription(modulePath, context.toString(), provider);
+            } catch (Exception e) {
+                log.warn("[LivingWiki] Provider fallback failed for module: {}", e.getMessage());
+            }
+        }
+
         if (geminiApiKey != null && !geminiApiKey.isBlank()) {
             try {
                 return callGeminiForModuleDescription(modulePath, context.toString());
@@ -148,25 +294,193 @@ public class LivingWikiService {
         }
 
         return "## " + modulePath + "\n\nThis module contains " + moduleFiles.size() + " files.\n\n"
-                + "Files:\n" + moduleFiles.stream().limit(20).map(f -> "- `" + f + "`").collect(Collectors.joining("\n"));
+                + "Files:\n"
+                + moduleFiles.stream().limit(20).map(f -> "- `" + f + "`").collect(Collectors.joining("\n"));
     }
 
-    // ─── Gemini API Calls ───────────────────────────────────────────────────
+    // ─── General AI Provider Calls
+    // ───────────────────────────────────────────────────
+
+    private String callAiForWiki(String structureContext, Map<String, Object> provider) {
+        String prompt = """
+                You are a senior technical documentation engineer specializing in industrial-grade codebase documentation.
+                Generate a comprehensive, deep-dive documentation suite for this repository.
+
+                For EACH file, output it in this EXACT format:
+                ===FILE: <filename>===
+                <file content here>
+
+                Files to generate:
+                1. README.md — Professional overview including high-level architecture, tech stack (with versions), quick start, and detailed module breakdowns. Include ASCII diagrams for simple flows.
+                2. adr.md — Formal Architecture Decision Records. Document at least 5 key decisions with status, context, decision, and consequences.
+                3. api-reference.md — Exhaustive API documentation. For every endpoint/service, include base URL, auth, exhaustive parameter tables, example requests/responses, and error codes.
+                4. architecture.md — Industrial-grade system design. Describe design patterns (SOLID, GoF), state management, security model, and data flow. Use deep technical analysis.
+                5. documentation-health.md — Detailed health report. Analyze coverage, clarity, and consistency. Provide a health score (X out of 100).
+                6. api-descriptions.json — Schema-compliant JSON of all endpoints.
+                7. doc_snapshot.json — Project statistics, module counts, and health tier.
+                8. tree.txt — Professional ASCII tree.
+                9. tree.json — Structured hierarchical map for visual exploration.
+                10. architecture-graph.json — A JSON object for interactive graph visualization: { "nodes": [{"id": "...", "label": "...", "type": "module/component"}], "edges": [{"source": "...", "target": "...", "label": "..."}] }
+
+                REQUIREMENTS:
+                - Content must be RICH and DETAILED. Avoid placeholders.
+                - Use professional, industrial-grade terminology.
+                - For diagrams, use clean, well-aligned ASCII art.
+                - DO NOT wrap in markdown code blocks. Output starts with ===FILE: README.md===
+
+                Repository Structure:
+                """
+                + structureContext;
+
+        return executeAiCall(prompt, provider);
+    }
+
+    private String callAiForModuleDescription(String modulePath, String codeContext, Map<String, Object> provider) {
+        String prompt = """
+                Analyze the following code from the '%s' module and generate a concise description.
+                Include: what it does, key classes/functions, and how it relates to other parts of the codebase.
+
+                Code:
+                %s
+                """.formatted(modulePath, codeContext.length() > 4000 ? codeContext.substring(0, 4000) : codeContext);
+
+        return executeAiCall(prompt, provider);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String executeAiCall(String prompt, Map<String, Object> provider) {
+        String providerName = (String) provider.get("name");
+        String model = (String) provider.get("model");
+        String apiKey = (String) provider.get("apiKey");
+        String baseUrl = (String) provider.get("baseUrl");
+
+        if ("Ollama".equals(providerName)) {
+            String url = (baseUrl != null && !baseUrl.isEmpty() ? baseUrl : "http://localhost:11434") + "/api/chat";
+            Map<String, Object> request = Map.of(
+                    "model", model != null ? model : "llama3",
+                    "messages", List.of(Map.of("role", "user", "content", prompt)),
+                    "stream", false);
+            return extractReply(restTemplate.postForEntity(url, request, Map.class), providerName);
+
+        } else if ("Anthropic".equals(providerName)) {
+            String url = "https://api.anthropic.com/v1/messages";
+            Map<String, Object> request = Map.of(
+                    "model", model != null ? model : "claude-3-5-sonnet-20240620",
+                    "messages", List.of(Map.of("role", "user", "content", prompt)),
+                    "max_tokens", 4096);
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("x-api-key", apiKey);
+            headers.set("anthropic-version", "2023-06-01");
+            return extractReply(
+                    restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class),
+                    providerName);
+
+        } else if ("Groq".equals(providerName) || "OpenAI".equals(providerName) || "XAI".equals(providerName)
+                || "LMStudio".equals(providerName)) {
+            // Determine correct URL first (before using baseUrl)
+            String url;
+            if ("Groq".equals(providerName))
+                url = "https://api.groq.com/openai/v1/chat/completions";
+            else if ("XAI".equals(providerName))
+                url = "https://api.x.ai/v1/chat/completions";
+            else if ("OpenAI".equals(providerName))
+                url = "https://api.openai.com/v1/chat/completions";
+            else if ("LMStudio".equals(providerName))
+                url = (baseUrl != null && !baseUrl.isEmpty() ? baseUrl : "http://localhost:1234")
+                        + "/v1/chat/completions";
+            else
+                url = (baseUrl != null && !baseUrl.isEmpty() ? baseUrl : "http://localhost:11434")
+                        + "/v1/chat/completions";
+
+            // Null-safe model
+            String safeModel = (model != null && !model.isBlank()) ? model : "llama3";
+            Map<String, Object> request = new java.util.LinkedHashMap<>();
+            request.put("model", safeModel);
+            request.put("messages", List.of(Map.of("role", "user", "content", prompt)));
+            request.put("max_tokens", 8000); // Must be large enough for full JSON
+            request.put("temperature", 0.3); // Lower temp = more predictable JSON output
+            HttpHeaders headers = new HttpHeaders();
+            if (apiKey != null && !apiKey.isBlank())
+                headers.setBearerAuth(apiKey);
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            return extractReply(
+                    restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class),
+                    providerName);
+        }
+
+        if ("Google".equals(providerName) || "Gemini".equals(providerName)) {
+            // Route through Gemini with the supplied apiKey
+            String key = apiKey != null && !apiKey.isBlank() ? apiKey : geminiApiKey;
+            if (key == null || key.isBlank())
+                throw new RuntimeException("Google/Gemini API key not configured");
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                    + (model != null ? model : "gemini-2.0-flash") + ":generateContent?key=" + key;
+            Map<String, Object> body = Map.of(
+                    "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            @SuppressWarnings("unchecked")
+            ResponseEntity<Map> resp = restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(body, headers),
+                    Map.class);
+            @SuppressWarnings("unchecked")
+            var candidates = (List<Map<String, Object>>) resp.getBody().get("candidates");
+            @SuppressWarnings("unchecked")
+            var parts2 = (List<Map<String, Object>>) ((Map<String, Object>) candidates.get(0).get("content"))
+                    .get("parts");
+            return (String) parts2.get(0).get("text");
+        }
+
+        throw new RuntimeException("Unsupported AI Provider: " + providerName);
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private String extractReply(ResponseEntity<Map> response, String providerName) {
+        try {
+            Map<String, Object> body = response.getBody();
+            if (body == null)
+                throw new RuntimeException("Empty response body from " + providerName);
+
+            if ("Ollama".equals(providerName)) {
+                return (String) ((Map<String, Object>) body.get("message")).get("content");
+            } else if ("Anthropic".equals(providerName)) {
+                return (String) ((Map<String, Object>) ((List<?>) body.get("content")).get(0)).get("text");
+            } else { // OpenAI-like schemas (Groq, OpenAI, XAI, LMStudio)
+                return (String) ((Map<String, Object>) ((Map<String, Object>) ((List<?>) body
+                        .get("choices")).get(0)).get("message")).get("content");
+            }
+        } catch (Exception e) {
+            log.error("[LivingWiki] Failed to extract reply from {}: {}", providerName, e.getMessage());
+            throw new RuntimeException("Failed to parse " + providerName + " response: " + e.getMessage());
+        }
+    }
+
+    // ─── Gemini Legacy Defaults
+    // ───────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
     private String callGeminiForWiki(String structureContext) {
         String prompt = """
-                You are a technical documentation writer. Based on the following repository structure,
-                generate a comprehensive wiki overview in Markdown format. Include:
-                1. A project overview section
-                2. Module descriptions with their purposes
-                3. Key architectural patterns observed
-                4. Dependency relationships between modules
-                
-                Be concise but informative. Use Markdown headers, lists, and code blocks where appropriate.
-                
+                You are a senior technical documentation engineer. Generate industrial-grade documentation files for this repository.
+
+                For EACH file, use this EXACT format:
+                ===FILE: <filename>===
+                <file content here>
+
+                Files to generate:
+                1. README.md — Professional overview, tech stack, setup
+                2. adr.md — Formal Architecture Decision Records (at least 5)
+                3. api-reference.md — Exhaustive API endpoint documentation
+                4. architecture.md — Industrial-grade system design & design patterns
+                5. documentation-health.md — Detailed health score (X out of 100)
+                6. api-descriptions.json — Schema-compliant endpoint JSON
+                7. doc_snapshot.json — Project stats and health tier
+                8. tree.txt — Professional ASCII directory tree
+                9. tree.json — Hierarchical map for visual exploration
+                10. architecture-graph.json — Graph nodes and edges for visualization: { "nodes": [{"id": "...", "label": "...", "type": "module"}], "edges": [{"source": "...", "target": "...", "label": "..."}] }
+
                 Repository Structure:
-                """ + structureContext;
+                """
+                + structureContext;
 
         return callGemini(prompt);
     }
@@ -176,7 +490,7 @@ public class LivingWikiService {
         String prompt = """
                 Analyze the following code from the '%s' module and generate a concise description.
                 Include: what it does, key classes/functions, and how it relates to other parts of the codebase.
-                
+
                 Code:
                 %s
                 """.formatted(modulePath, codeContext.length() > 4000 ? codeContext.substring(0, 4000) : codeContext);
@@ -186,20 +500,18 @@ public class LivingWikiService {
 
     @SuppressWarnings("unchecked")
     private String callGemini(String prompt) {
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiApiKey;
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
+                + geminiApiKey;
 
         Map<String, Object> body = Map.of(
                 "contents", List.of(Map.of(
-                        "parts", List.of(Map.of("text", prompt))
-                ))
-        );
+                        "parts", List.of(Map.of("text", prompt)))));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         ResponseEntity<Map> response = restTemplate.exchange(
-                url, HttpMethod.POST, new HttpEntity<>(body, headers), Map.class
-        );
+                url, HttpMethod.POST, new HttpEntity<>(body, headers), Map.class);
 
         var candidates = (List<Map<String, Object>>) response.getBody().get("candidates");
         if (candidates != null && !candidates.isEmpty()) {
@@ -217,11 +529,13 @@ public class LivingWikiService {
 
     private String extractModule(String filePath) {
         String[] parts = filePath.split("[/\\\\]");
-        if (parts.length <= 1) return "(root)";
+        if (parts.length <= 1)
+            return "(root)";
         return parts[0]; // top-level directory
     }
 
-    private String generateFallbackWiki(String repoUrl, Map<String, Set<String>> modules, int totalFiles, int totalDeps) {
+    private String generateFallbackWiki(String repoUrl, Map<String, Set<String>> modules, int totalFiles,
+            int totalDeps) {
         StringBuilder wiki = new StringBuilder();
         wiki.append("# Project Wiki\n\n");
         wiki.append("**Repository:** ").append(repoUrl).append("\n\n");
@@ -234,8 +548,7 @@ public class LivingWikiService {
         for (var entry : modules.entrySet()) {
             wiki.append("### ").append(entry.getKey()).append("\n\n");
             wiki.append("Contains ").append(entry.getValue().size()).append(" files:\n\n");
-            entry.getValue().stream().limit(10).forEach(f ->
-                    wiki.append("- `").append(f).append("`\n"));
+            entry.getValue().stream().limit(10).forEach(f -> wiki.append("- `").append(f).append("`\n"));
             if (entry.getValue().size() > 10) {
                 wiki.append("- *... and ").append(entry.getValue().size() - 10).append(" more*\n");
             }
