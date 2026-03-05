@@ -5,6 +5,7 @@ import ai.mindvex.backend.repository.FileDependencyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,36 +35,34 @@ public class SourceCodeDependencyExtractor {
 
     // Regex patterns for import extraction per language family
     private static final Pattern JS_IMPORT = Pattern.compile(
-            "(?:import\\s+.*?from\\s+['\"]([^'\"]+)['\"])|(?:require\\s*\\(\\s*['\"]([^'\"]+)['\"]\\s*\\))"
-    );
+            "(?:import\\s+.*?from\\s+['\"]([^'\"]+)['\"])|(?:require\\s*\\(\\s*['\"]([^'\"]+)['\"]\\s*\\))");
     private static final Pattern PYTHON_IMPORT = Pattern.compile(
-            "(?:from\\s+(\\S+)\\s+import)|(?:import\\s+(\\S+))"
-    );
+            "(?:from\\s+(\\S+)\\s+import)|(?:import\\s+(\\S+))");
     private static final Pattern JAVA_IMPORT = Pattern.compile(
-            "import\\s+(?:static\\s+)?(\\S+);"
-    );
+            "import\\s+(?:static\\s+)?(\\S+);");
     private static final Pattern GO_IMPORT = Pattern.compile(
-            "\"([^\"]+)\""
-    );
+            "\"([^\"]+)\"");
 
     private static final Set<String> SOURCE_EXTENSIONS = Set.of(
             ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
             ".py", ".java", ".kt", ".go", ".rs", ".cs",
-            ".cpp", ".cc", ".c", ".h", ".hpp"
-    );
+            ".cpp", ".cc", ".c", ".h", ".hpp");
 
     private static final Set<String> SKIP_DIRS = Set.of(
             "node_modules", ".git", "dist", "build", ".cache",
-            ".next", "target", "__pycache__", ".gradle", "vendor"
-    );
+            ".next", "target", "__pycache__", ".gradle", "vendor");
 
     /**
      * Clone the repo, extract import-based file dependencies, and save them.
      *
+     * @param userId      owner user ID
+     * @param repoUrl     repository URL
+     * @param accessToken GitHub personal access token (may be null for public
+     *                    repos)
      * @return number of dependency edges saved
      */
     @Transactional
-    public int extractFromRepo(Long userId, String repoUrl) throws IOException {
+    public int extractFromRepo(Long userId, String repoUrl, String accessToken) throws IOException {
         log.info("[SourceCodeDepExtractor] Starting extraction for user={} repo={}", userId, repoUrl);
 
         // Clone the repo to a temp directory
@@ -74,11 +73,19 @@ public class SourceCodeDependencyExtractor {
             String normalizedUrl = normalizeRepoUrl(repoUrl);
             log.info("[SourceCodeDepExtractor] Normalized repo URL: {}", normalizedUrl);
             log.info("[SourceCodeDepExtractor] Cloning {} into {}", normalizedUrl, tempDir);
-            Git.cloneRepository()
+
+            var cloneCmd = Git.cloneRepository()
                     .setURI(normalizedUrl)
                     .setDirectory(tempDir.toFile())
-                    .setDepth(1) // shallow clone for speed
-                    .call();
+                    .setDepth(1); // shallow clone for speed
+
+            // Add GitHub authentication if access token is provided
+            if (accessToken != null && !accessToken.isBlank()) {
+                log.info("[SourceCodeDepExtractor] Using GitHub authentication for private repository");
+                cloneCmd.setCredentialsProvider(new UsernamePasswordCredentialsProvider("oauth2", accessToken));
+            }
+
+            cloneCmd.call();
 
             // Collect all source files
             Map<String, Path> sourceFiles = new LinkedHashMap<>();
@@ -126,8 +133,7 @@ public class SourceCodeDependencyExtractor {
                         String resolved = resolveImport(relativePath, importPath, filePathSet);
                         if (resolved != null && !resolved.equals(relativePath)) {
                             allEdges.add(new FileDependency(
-                                    userId, repoUrl, relativePath, resolved, "import"
-                            ));
+                                    userId, repoUrl, relativePath, resolved, "import"));
                         }
                     }
                 } catch (Exception e) {
@@ -235,16 +241,19 @@ public class SourceCodeDependencyExtractor {
         }
 
         // Try direct match
-        if (allFiles.contains(resolved)) return resolved;
+        if (allFiles.contains(resolved))
+            return resolved;
 
         // Try with common extensions
         for (String ext : List.of(".ts", ".tsx", ".js", ".jsx", ".py", ".java", ".kt", ".go")) {
-            if (allFiles.contains(resolved + ext)) return resolved + ext;
+            if (allFiles.contains(resolved + ext))
+                return resolved + ext;
         }
 
         // Try as directory with index file
         for (String idx : List.of("/index.ts", "/index.tsx", "/index.js", "/index.jsx")) {
-            if (allFiles.contains(resolved + idx)) return resolved + idx;
+            if (allFiles.contains(resolved + idx))
+                return resolved + idx;
         }
 
         // For Java/Kotlin: try matching last segment
@@ -254,7 +263,8 @@ public class SourceCodeDependencyExtractor {
 
         for (String file : allFiles) {
             String baseName = file.contains("/") ? file.substring(file.lastIndexOf('/') + 1) : file;
-            String nameWithoutExt = baseName.contains(".") ? baseName.substring(0, baseName.lastIndexOf('.')) : baseName;
+            String nameWithoutExt = baseName.contains(".") ? baseName.substring(0, baseName.lastIndexOf('.'))
+                    : baseName;
             if (nameWithoutExt.equals(lastSegment)) {
                 return file;
             }
@@ -298,7 +308,8 @@ public class SourceCodeDependencyExtractor {
 
         String u = repoUrl.trim();
         // strip trailing slash
-        if (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+        if (u.endsWith("/"))
+            u = u.substring(0, u.length() - 1);
 
         // Accept https://github.com/owner/repo or git@github.com:owner/repo(.git)
         boolean httpsForm = u.matches("(?i)^https?://github\\.com/[^/]+/[^/]+(?:\\.git)?$");

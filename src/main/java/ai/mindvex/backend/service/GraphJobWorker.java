@@ -1,7 +1,9 @@
 package ai.mindvex.backend.service;
 
 import ai.mindvex.backend.entity.IndexJob;
+import ai.mindvex.backend.entity.User;
 import ai.mindvex.backend.repository.IndexJobRepository;
+import ai.mindvex.backend.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -12,7 +14,8 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 
 /**
- * Async job worker that polls the index_jobs table for pending graph_build jobs.
+ * Async job worker that polls the index_jobs table for pending graph_build
+ * jobs.
  *
  * When a graph_build job is found, it uses SourceCodeDependencyExtractor to
  * clone the repo, parse import statements, and populate file_dependencies.
@@ -24,6 +27,7 @@ public class GraphJobWorker {
 
     private final IndexJobRepository indexJobRepository;
     private final SourceCodeDependencyExtractor sourceCodeExtractor;
+    private final UserRepository userRepository;
 
     @Scheduled(fixedDelayString = "${app.graph.worker.interval-ms:5000}")
     @Transactional
@@ -40,8 +44,16 @@ public class GraphJobWorker {
         indexJobRepository.save(job);
 
         try {
+            // Fetch user's GitHub access token for private repository support
+            String accessToken = userRepository.findById(job.getUserId())
+                    .map(User::getGithubAccessToken)
+                    .orElse(null);
+
             // Extract dependencies by cloning + parsing imports
-            int edgesExtracted = sourceCodeExtractor.extractFromRepo(job.getUserId(), job.getRepoUrl());
+            int edgesExtracted = sourceCodeExtractor.extractFromRepo(
+                    job.getUserId(),
+                    job.getRepoUrl(),
+                    accessToken);
 
             job.setStatus("done");
             job.setFinishedAt(LocalDateTime.now());
