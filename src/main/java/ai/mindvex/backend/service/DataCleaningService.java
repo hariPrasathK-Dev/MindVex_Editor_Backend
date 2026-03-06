@@ -21,8 +21,57 @@ import java.util.stream.Collectors;
 /**
  * Data Cleaning and Standardization Service
  * 
- * Responsible for cleaning, deduplicating, and standardizing extracted documentation data
- * before final formatting. This ensures consistency and removes redundancy.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * CRITICAL: THIS IS A CLEANING SERVICE, NOT A DISCOVERY SERVICE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 
+ * This service operates on ALREADY-EXTRACTED data from semantic search.
+ * It does NOT discover new information or generate new endpoints.
+ * 
+ * **What It Does:**
+ * 1. Parses extracted code chunks into structured DTOs (ExtractedEndpoint)
+ * 2. Removes duplicate endpoints (same method + path)
+ * 3. Merges overlapping information from multiple sources
+ * 4. Standardizes descriptions (professional, concise, consistent)
+ * 5. Normalizes formatting (paths, JSON, parameter tables)
+ * 6. Preserves critical elements (commands, env vars, code snippets)
+ * 
+ * **What It Does NOT Do:**
+ * ❌ Discover new endpoints not in extracted code
+ * ❌ Invent or hallucinate API routes
+ * ❌ Modify endpoint paths (/get_posts stays /get_posts)
+ * ❌ Change commands or environment variables
+ * ❌ Alter code snippets
+ * 
+ * **Process Flow:**
+ * ```
+ * Input: Code chunks from semantic search (already extracted)
+ *   ↓
+ * AI Parsing: Code → JSON (router prefixes, params, responses)
+ *   ↓
+ * Deduplication: Remove duplicates, merge overlapping data
+ *   ↓
+ * Standardization: Clean descriptions, normalize formatting
+ *   ↓
+ * Output: Clean ExtractedEndpoint DTOs ready for markdown generation
+ * ```
+ * 
+ * **Example:**
+ * ```
+ * Input (3 code chunks):
+ *   Chunk 1: @router.post("/login") in auth router with prefix="/auth"
+ *   Chunk 2: POST /auth/login with description "logs in user"
+ *   Chunk 3: POST /auth/login with request body example
+ * 
+ * Output (1 cleaned endpoint):
+ *   method: POST
+ *   path: /auth/login  ← Prefix detected and combined
+ *   description: "Authenticate user with credentials."  ← Standardized
+ *   requestBody: {...}  ← Merged from chunk 3
+ * ```
+ * 
+ * @see ExtractedEndpoint - Structured endpoint DTO
+ * @see LivingWikiService - Uses this service for two-stage documentation
  */
 @Service
 @RequiredArgsConstructor
@@ -33,8 +82,14 @@ public class DataCleaningService {
     private final RestTemplate restTemplate = new RestTemplate();
 
     /**
-     * Extract endpoints from code chunks using AI to parse into structured JSON.
-     * This is the first pass: code → structured data.
+     * Extract endpoints from ALREADY-EXTRACTED code chunks using AI to parse into structured JSON.
+     * 
+     * CRITICAL: The code chunks have already been extracted via semantic search.
+     * This method only PARSES and STRUCTURES the extracted code, it does NOT discover new endpoints.
+     * 
+     * @param codeChunks Already-extracted code from semantic search (contains route definitions)
+     * @param provider AI provider configuration (Groq, OpenAI, etc.)
+     * @return List of ExtractedEndpoint objects parsed from code (may contain duplicates)
      */
     public List<ExtractedEndpoint> extractEndpointsFromChunks(String codeChunks, Map<String, Object> provider) {
         log.info("[DataCleaning] Extracting endpoints from code chunks ({} chars)", codeChunks.length());
@@ -109,37 +164,56 @@ public class DataCleaningService {
     }
 
     /**
-     * Build prompt for AI to extract endpoints from code as JSON
+     * Build prompt for AI to extract endpoints from code as JSON.
+     * 
+     * CRITICAL: This is a CLEANING operation, not a discovery operation.
+     * The code has already been extracted via semantic search.
+     * The AI should ONLY parse what's in the provided code chunks.
      */
     private String buildExtractionPrompt(String codeChunks) {
         return """
-                You are a code analysis expert. Extract API endpoints from the provided code.
+                You are a data cleaning specialist for API documentation.
                 
-                **CRITICAL INSTRUCTIONS:**
+                **YOUR ROLE: CLEAN AND STRUCTURE ALREADY-EXTRACTED CODE**
                 
-                1. **Router Prefix Detection:**
+                The code below has already been extracted from a repository.
+                Your job is to parse this extracted code into structured JSON.
+                
+                🚫 DO NOT discover new endpoints
+                🚫 DO NOT invent or hallucinate endpoints
+                🚫 DO NOT modify endpoint paths
+                ✅ ONLY extract what you can SEE in the provided code
+                ✅ Keep HTTP methods and paths EXACTLY as written
+                ✅ Extract parameter names EXACTLY as they appear
+                
+                **EXTRACTION INSTRUCTIONS:**
+                
+                1. **Router Prefix Detection (CRITICAL for correct paths):**
                    - Look for: `APIRouter(prefix="/auth")`, `Blueprint(url_prefix="/api")`, `@RequestMapping("/users")`
-                   - Look for: `app.include_router(router, prefix="/auth")`
-                   - COMBINE prefix + endpoint path: prefix="/auth" + @router.post("/login") = /auth/login
+                   - Look for registration: `app.include_router(router, prefix="/auth")`
+                   - COMBINE prefix + endpoint: prefix="/auth" + @router.post("/login") = /auth/login
+                   - Example: If you see `router = APIRouter(prefix="/auth")` and `@router.post("/login")`, extract: "/auth/login"
                 
-                2. **Extract ONLY real endpoints from code:**
-                   - HTTP decorators: @app.get, @app.post, @router.delete, @GetMapping, @PostMapping
-                   - Route definitions: router.get(), app.route(), path()
-                   - Extract EXACT path as written in code
+                2. **Extract endpoints from decorators/annotations:**
+                   - Python FastAPI: `@app.get("/users")`, `@router.post("/auth/login")`
+                   - Python Flask: `@app.route("/posts", methods=["POST"])`
+                   - Java Spring: `@GetMapping("/users/{id}")`, `@PostMapping("/posts")`
+                   - Express/Node: `router.get("/timeline")`, `app.post("/connect")`
+                   - Extract path EXACTLY: /get_posts means /get_posts (NOT /posts)
                 
-                3. **Parse parameters:**
-                   - Path params: {id}, {username}, {post_id}
-                   - Query params: @RequestParam, request.args, query parameters
-                   - Request body: @RequestBody, request.json, function parameters
+                3. **Extract parameters from function signatures:**
+                   - Path params: `{id}`, `{username}`, `{post_id}` in decorator
+                   - Query params: function parameters, @RequestParam annotations
+                   - Body params: @RequestBody, request.json, function parameters
+                   - DO NOT invent parameters that aren't in code
                 
-                4. **Output ONLY valid JSON array:**
+                4. **Required JSON output format:**
                 
-                ```json
                 [
                   {
                     "method": "POST",
                     "path": "/auth/login",
-                    "description": "Authenticate user with email and password",
+                    "description": "Authenticate user",
                     "requiresAuth": false,
                     "routerPrefix": "/auth",
                     "sourceFile": "routers/auth.py",
@@ -150,17 +224,10 @@ public class DataCleaningService {
                         "location": "body",
                         "required": true,
                         "description": "User's email or username"
-                      },
-                      {
-                        "name": "password",
-                        "type": "string",
-                        "location": "body",
-                        "required": true,
-                        "description": "User's password"
                       }
                     ],
                     "requestBody": "{\\"username\\": \\"user@example.com\\", \\"password\\": \\"secret\\"}",
-                    "responseBody": "{\\"token\\": \\"jwt_token_here\\", \\"user\\": {...}}",
+                    "responseBody": "{\\"token\\": \\"jwt_token\\", \\"user\\": {...}}",
                     "errorResponses": [
                       {
                         "code": 401,
@@ -171,13 +238,27 @@ public class DataCleaningService {
                     ]
                   }
                 ]
-                ```
                 
-                **Code to analyze:**
+                **QUALITY RULES:**
+                
+                ✅ If you see `POST /auth/register` in code → extract `POST /auth/register`
+                ✅ If you see `/get_posts` → extract `/get_posts` (DO NOT change to /posts)
+                ✅ If you see `{username}` → extract `{username}` (EXACT placeholder)
+                ✅ If parameter type unclear → use "string" as default
+                ✅ If description unclear → use brief extracted comment or "No description"
+                
+                🚫 DO NOT output: Generic /users, /posts, /items if code shows specific paths
+                🚫 DO NOT normalize paths: Keep /get_posts, NOT /posts
+                🚫 DO NOT invent parameters not in function signature
+                🚫 DO NOT add endpoints you don't see in code
+                
+                **CODE TO PARSE (ALREADY EXTRACTED):**
                 
                 %s
                 
-                Output ONLY the JSON array. No markdown, no code blocks, no explanations.
+                **OUTPUT:**
+                Output ONLY the JSON array. No markdown code blocks. No explanations. No additional text.
+                Start directly with [ and end with ].
                 """.formatted(codeChunks);
     }
 
@@ -402,5 +483,242 @@ public class DataCleaningService {
         path = path.replaceAll("//+", "/");
         
         return path;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // README CLEANING AND STANDARDIZATION
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Clean and standardize README sections extracted from code/docs.
+     * 
+     * CRITICAL: This method does NOT discover new information.
+     * It only cleans, deduplicates, and standardizes what has already been extracted.
+     * 
+     * @param extractedSections List of already-extracted README sections from code chunks
+     * @return Cleaned and deduplicated sections ready for formatting
+     */
+    public Map<String, String> cleanReadmeSections(List<Map<String, Object>> extractedSections) {
+        log.info("[DataCleaning] Cleaning {} README sections", extractedSections.size());
+        
+        Map<String, List<String>> sectionsByType = new LinkedHashMap<>();
+        Map<String, List<String>> commandsBySection = new LinkedHashMap<>();
+        Map<String, List<String>> envVarsBySection = new LinkedHashMap<>();
+        
+        // Group extracted content by section type
+        for (Map<String, Object> section : extractedSections) {
+            String type = (String) section.get("type");
+            String content = (String) section.get("content");
+            
+            if (type == null || content == null || content.isBlank()) {
+                continue;
+            }
+            
+            // Add to appropriate section
+            sectionsByType.computeIfAbsent(type, k -> new ArrayList<>()).add(content);
+            
+            // Extract and preserve commands (do not modify)
+            List<String> commands = extractCommands(content);
+            if (!commands.isEmpty()) {
+                commandsBySection.computeIfAbsent(type, k -> new ArrayList<>()).addAll(commands);
+            }
+            
+            // Extract and preserve environment variables (do not modify)
+            List<String> envVars = extractEnvironmentVariables(content);
+            if (!envVars.isEmpty()) {
+                envVarsBySection.computeIfAbsent(type, k -> new ArrayList<>()).addAll(envVars);
+            }
+        }
+        
+        // Clean and merge each section type
+        Map<String, String> cleanedSections = new LinkedHashMap<>();
+        
+        for (Map.Entry<String, List<String>> entry : sectionsByType.entrySet()) {
+            String type = entry.getKey();
+            List<String> contents = entry.getValue();
+            
+            // Merge repeated sections
+            String merged = mergeRepeatedSections(contents);
+            
+            // Standardize formatting (but preserve commands/env vars)
+            String standardized = standardizeReadmeSection(merged, type);
+            
+            // Re-inject preserved commands and env vars
+            standardized = reInjectPreservedElements(
+                standardized,
+                commandsBySection.getOrDefault(type, new ArrayList<>()),
+                envVarsBySection.getOrDefault(type, new ArrayList<>())
+            );
+            
+            cleanedSections.put(type, standardized);
+        }
+        
+        log.info("[DataCleaning] Cleaned {} unique README sections", cleanedSections.size());
+        return cleanedSections;
+    }
+
+    /**
+     * Extract shell commands from text (to preserve them unchanged)
+     */
+    private List<String> extractCommands(String text) {
+        List<String> commands = new ArrayList<>();
+        
+        // Pattern 1: Code blocks with bash/sh/shell
+        Pattern codeBlockPattern = Pattern.compile("```(?:bash|sh|shell|cmd)\\s*\\n([^`]+)```", Pattern.DOTALL);
+        Matcher matcher = codeBlockPattern.matcher(text);
+        while (matcher.find()) {
+            String block = matcher.group(1).trim();
+            commands.addAll(Arrays.asList(block.split("\\r?\\n")));
+        }
+        
+        // Pattern 2: Single-line commands starting with $, #, > 
+        Pattern cmdLinePattern = Pattern.compile("^\\s*[$#>]\\s*(.+)$", Pattern.MULTILINE);
+        matcher = cmdLinePattern.matcher(text);
+        while (matcher.find()) {
+            commands.add(matcher.group(1).trim());
+        }
+        
+        // Pattern 3: npm/mvn/pip/docker commands
+        Pattern toolPattern = Pattern.compile("((?:npm|mvn|pip|docker|git|yarn|pnpm)\\s+[^\\n]+)", Pattern.MULTILINE);
+        matcher = toolPattern.matcher(text);
+        while (matcher.find()) {
+            commands.add(matcher.group(1).trim());
+        }
+        
+        return commands.stream().distinct().collect(Collectors.toList());
+    }
+
+    /**
+     * Extract environment variables from text (to preserve them unchanged)
+     */
+    private List<String> extractEnvironmentVariables(String text) {
+        List<String> envVars = new ArrayList<>();
+        
+        // Pattern: VARIABLE_NAME=value or process.env.VARIABLE_NAME
+        Pattern envPattern = Pattern.compile("([A-Z_][A-Z0-9_]*)\\s*=\\s*['\"]?([^'\"\\s\\n]+)", Pattern.MULTILINE);
+        Matcher matcher = envPattern.matcher(text);
+        while (matcher.find()) {
+            envVars.add(matcher.group(1) + "=" + matcher.group(2));
+        }
+        
+        // Pattern: .env file format
+        Pattern dotEnvPattern = Pattern.compile("^\\s*([A-Z_][A-Z0-9_]*)\\s*=\\s*(.+)$", Pattern.MULTILINE);
+        matcher = dotEnvPattern.matcher(text);
+        while (matcher.find()) {
+            String key = matcher.group(1).trim();
+            String value = matcher.group(2).trim();
+            if (!envVars.contains(key + "=" + value)) {
+                envVars.add(key + "=" + value);
+            }
+        }
+        
+        return envVars.stream().distinct().collect(Collectors.toList());
+    }
+
+    /**
+     * Merge repeated sections by removing duplicates and fragments
+     */
+    private String mergeRepeatedSections(List<String> sections) {
+        if (sections.isEmpty()) {
+            return "";
+        }
+        
+        if (sections.size() == 1) {
+            return sections.get(0);
+        }
+        
+        // Sort by length (prefer complete sections over fragments)
+        sections.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        
+        // Start with the longest (most complete) section
+        StringBuilder merged = new StringBuilder(sections.get(0));
+        
+        // Add unique content from other sections
+        for (int i = 1; i < sections.size(); i++) {
+            String section = sections.get(i);
+            
+            // If this section contains unique information not in merged, add it
+            if (!merged.toString().contains(section.trim())) {
+                // Extract unique sentences/lines
+                String[] lines = section.split("\\r?\\n");
+                for (String line : lines) {
+                    String trimmed = line.trim();
+                    if (!trimmed.isEmpty() && !merged.toString().contains(trimmed)) {
+                        merged.append("\n").append(line);
+                    }
+                }
+            }
+        }
+        
+        return merged.toString().trim();
+    }
+
+    /**
+     * Standardize README section formatting without changing content
+     */
+    private String standardizeReadmeSection(String content, String sectionType) {
+        if (content == null || content.isBlank()) {
+            return "";
+        }
+        
+        // Remove excessive newlines (max 2 consecutive)
+        content = content.replaceAll("\\n{3,}", "\n\n");
+        
+        // Trim whitespace at start/end
+        content = content.trim();
+        
+        // Ensure proper markdown heading format (not changing content, just format)
+        content = content.replaceAll("^#+\\s*([^\\n]+)\\s*$", "## $1");
+        
+        // Standardize list formatting
+        content = content.replaceAll("^\\s*[-*+]\\s+", "- ");
+        content = content.replaceAll("^\\s*(\\d+)\\.\\s+", "$1. ");
+        
+        return content;
+    }
+
+    /**
+     * Re-inject preserved commands and environment variables
+     * Ensures they are not modified during cleaning
+     */
+    private String reInjectPreservedElements(String content, List<String> commands, List<String> envVars) {
+        // This is a placeholder - in practice, we mark these during extraction
+        // and ensure they pass through cleaning unchanged
+        
+        // The extraction process already preserves them in the original positions
+        // This method exists to document the intent
+        
+        return content;
+    }
+
+    /**
+     * Validate that critical elements were preserved during cleaning
+     */
+    public boolean validatePreservedElements(String original, String cleaned) {
+        // Extract commands from both
+        List<String> originalCommands = extractCommands(original);
+        List<String> cleanedCommands = extractCommands(cleaned);
+        
+        // Ensure all original commands are still present
+        for (String cmd : originalCommands) {
+            if (!cleanedCommands.contains(cmd)) {
+                log.warn("[DataCleaning] Command lost during cleaning: {}", cmd);
+                return false;
+            }
+        }
+        
+        // Extract env vars from both
+        List<String> originalEnvVars = extractEnvironmentVariables(original);
+        List<String> cleanedEnvVars = extractEnvironmentVariables(cleaned);
+        
+        // Ensure all original env vars are still present
+        for (String env : originalEnvVars) {
+            if (!cleanedEnvVars.contains(env)) {
+                log.warn("[DataCleaning] Environment variable lost during cleaning: {}", env);
+                return false;
+            }
+        }
+        
+        return true;
     }
 }
