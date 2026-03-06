@@ -1,6 +1,10 @@
 server:
   port: ${PORT:8080}
-  max-http-header-size: 65536
+  max-http-request-header-size: 131072
+  max-http-response-header-size: 131072
+  tomcat:
+    max-http-header-size: 131072
+    max-swallow-size: -1
   error:
     include-message: always
     include-binding-errors: always
