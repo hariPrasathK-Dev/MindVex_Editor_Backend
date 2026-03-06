@@ -5,11 +5,16 @@ import ai.mindvex.backend.repository.FileDependencyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.transport.HttpTransport;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
+import org.eclipse.jgit.transport.http.HttpConnectionFactory;
+import org.eclipse.jgit.transport.http.JDKHttpConnectionFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
@@ -74,18 +79,12 @@ public class SourceCodeDependencyExtractor {
             log.info("[SourceCodeDepExtractor] Normalized repo URL: {}", normalizedUrl);
             log.info("[SourceCodeDepExtractor] Cloning {} into {}", normalizedUrl, tempDir);
 
-            var cloneCmd = Git.cloneRepository()
-                    .setURI(normalizedUrl)
-                    .setDirectory(tempDir.toFile())
-                    .setDepth(1); // shallow clone for speed
+            // Configure JGit HTTP settings for large repositories
+            configureHttpSettings();
 
-            // Add GitHub authentication if access token is provided
-            if (accessToken != null && !accessToken.isBlank()) {
-                log.info("[SourceCodeDepExtractor] Using GitHub authentication for private repository");
-                cloneCmd.setCredentialsProvider(new UsernamePasswordCredentialsProvider("oauth2", accessToken));
-            }
-
-            cloneCmd.call();
+            // Clone with retry logic (up to 3 attempts)
+            Git git = cloneWithRetry(normalizedUrl, tempDir, accessToken, 3);
+            git.close();
 
             // Collect all source files
             Map<String, Path> sourceFiles = new LinkedHashMap<>();
@@ -159,6 +158,85 @@ public class SourceCodeDependencyExtractor {
             // Clean up temp directory
             deleteRecursively(tempDir);
         }
+    }
+
+    /**
+     * Configure HTTP settings for JGit to handle large repositories.
+     */
+    private void configureHttpSettings() {
+        HttpConnectionFactory factory = new JDKHttpConnectionFactory() {
+            @Override
+            public HttpURLConnection create(java.net.URL url) throws java.io.IOException {
+                HttpURLConnection connection = super.create(url);
+                // Increase timeouts for large repositories
+                connection.setConnectTimeout(60000); // 60 seconds
+                connection.setReadTimeout(300000);   // 5 minutes
+                return connection;
+            }
+        };
+        HttpTransport.setConnectionFactory(factory);
+    }
+
+    /**
+     * Clone repository with retry logic and exponential backoff.
+     */
+    private Git cloneWithRetry(String repoUrl, Path targetDir, String accessToken, int maxAttempts) 
+            throws IOException {
+        int attempt = 0;
+        IOException lastException = null;
+
+        while (attempt < maxAttempts) {
+            attempt++;
+            try {
+                log.info("[SourceCodeDepExtractor] Clone attempt {}/{} for {}", attempt, maxAttempts, repoUrl);
+
+                var cloneCmd = Git.cloneRepository()
+                        .setURI(repoUrl)
+                        .setDirectory(targetDir.toFile())
+                        .setDepth(1) // shallow clone for speed
+                        .setTimeout(300); // 5 minutes timeout
+
+                // Add GitHub authentication if access token is provided
+                if (accessToken != null && !accessToken.isBlank()) {
+                    log.info("[SourceCodeDepExtractor] Using GitHub authentication");
+                    cloneCmd.setCredentialsProvider(
+                        new UsernamePasswordCredentialsProvider("oauth2", accessToken)
+                    );
+                }
+
+                // Configure transport to handle large payloads
+                cloneCmd.setTransportConfigCallback(transport -> {
+                    if (transport instanceof HttpTransport) {
+                        ((HttpTransport) transport).setPostBuffer(524288000); // 500 MB buffer
+                    }
+                });
+
+                Git git = cloneCmd.call();
+                log.info("[SourceCodeDepExtractor] Successfully cloned {} on attempt {}", repoUrl, attempt);
+                return git;
+
+            } catch (GitAPIException | IOException e) {
+                lastException = new IOException("Clone failed on attempt " + attempt + ": " + e.getMessage(), e);
+                log.warn("[SourceCodeDepExtractor] Attempt {}/{} failed: {}", 
+                        attempt, maxAttempts, e.getMessage());
+
+                if (attempt < maxAttempts) {
+                    // Exponential backoff: 2, 4, 8 seconds...
+                    long waitTime = (long) Math.pow(2, attempt) * 1000;
+                    log.info("[SourceCodeDepExtractor] Waiting {}ms before retry...", waitTime);
+                    try {
+                        Thread.sleep(waitTime);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Clone interrupted", ie);
+                    }
+                }
+            }
+        }
+
+        // All attempts failed
+        log.error("[SourceCodeDepExtractor] All {} clone attempts failed for {}", maxAttempts, repoUrl);
+        throw lastException;
     }
 
     /**
