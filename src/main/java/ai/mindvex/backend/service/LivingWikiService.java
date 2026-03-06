@@ -317,12 +317,12 @@ public class LivingWikiService {
         // ═══════════════════════════════════════════════════════════════════════
         // GENERATE EACH DOCUMENTATION FILE SEPARATELY TO AVOID PAYLOAD TOO LARGE
         // ═══════════════════════════════════════════════════════════════════════
-        
+
         Map<String, String> documentationFiles = new LinkedHashMap<>();
-        
+
         try {
             log.info("[LivingWiki] Generating documentation files separately to avoid payload size issues");
-            
+
             // File 1: README.md (general understanding)
             log.info("[LivingWiki] [1/3] Generating README.md...");
             String readmeContext = buildReadmeContext(context.toString(), semanticContext.toString());
@@ -331,7 +331,7 @@ public class LivingWikiService {
                 documentationFiles.put("README.md", readme);
                 log.info("[LivingWiki] ✓ README.md generated ({} chars)", readme.length());
             }
-            
+
             // File 2: ADR.md (architecture decisions)
             log.info("[LivingWiki] [2/3] Generating adr.md...");
             String adrContext = buildAdrContext(context.toString());
@@ -340,7 +340,7 @@ public class LivingWikiService {
                 documentationFiles.put("adr.md", adr);
                 log.info("[LivingWiki] ✓ adr.md generated ({} chars)", adr.length());
             }
-            
+
             // File 3: api-reference.md (API documentation)
             log.info("[LivingWiki] [3/3] Generating api-reference.md...");
             String apiContext = buildApiContext(context.toString(), semanticContext.toString());
@@ -349,14 +349,14 @@ public class LivingWikiService {
                 documentationFiles.put("api-reference.md", apiRef);
                 log.info("[LivingWiki] ✓ api-reference.md generated ({} chars)", apiRef.length());
             }
-            
+
             if (documentationFiles.size() >= 2) {
                 log.info("[LivingWiki] Successfully generated {} documentation files", documentationFiles.size());
                 return documentationFiles;
             }
-            
+
             log.warn("[LivingWiki] Only generated {} files, using fallback", documentationFiles.size());
-            
+
         } catch (Exception e) {
             log.error("[LivingWiki] Failed to generate documentation files: {}", e.getMessage(), e);
         }
@@ -373,17 +373,18 @@ public class LivingWikiService {
     private String buildReadmeContext(String structureContext, String semanticContext) {
         StringBuilder readmeCtx = new StringBuilder();
         readmeCtx.append(structureContext); // Repository structure, file counts
-        
+
         // Extract ONLY general code chunks (NOT the "API ROUTES & ENDPOINTS" section)
         if (semanticContext != null && semanticContext.contains("═══ API ROUTES & ENDPOINTS ═══")) {
-            String generalChunks = semanticContext.substring(0, semanticContext.indexOf("═══ API ROUTES & ENDPOINTS ═══"));
+            String generalChunks = semanticContext.substring(0,
+                    semanticContext.indexOf("═══ API ROUTES & ENDPOINTS ═══"));
             readmeCtx.append("\n\n─── Representative Code Samples ───\n");
             readmeCtx.append(generalChunks);
         } else {
             readmeCtx.append("\n\n─── Representative Code Samples ───\n");
             readmeCtx.append(semanticContext != null ? semanticContext : "");
         }
-        
+
         return readmeCtx.toString();
     }
 
@@ -396,16 +397,15 @@ public class LivingWikiService {
         if (structureContext.contains("─── GitHub Architecture Decision Records ───")) {
             int startIdx = structureContext.indexOf("─── GitHub Architecture Decision Records ───");
             String githubSection = structureContext.substring(startIdx);
-            
+
             // Take only repo URL and GitHub data (not file lists)
             String repoUrl = structureContext.substring(
-                structureContext.indexOf("Repository: "), 
-                structureContext.indexOf("\n", structureContext.indexOf("Repository: "))
-            );
-            
+                    structureContext.indexOf("Repository: "),
+                    structureContext.indexOf("\n", structureContext.indexOf("Repository: ")));
+
             return repoUrl + "\n\n" + githubSection;
         }
-        
+
         // Minimal context if no GitHub data
         return structureContext.substring(0, Math.min(1000, structureContext.length()));
     }
@@ -416,16 +416,15 @@ public class LivingWikiService {
      */
     private String buildApiContext(String structureContext, String semanticContext) {
         StringBuilder apiCtx = new StringBuilder();
-        
+
         // Add minimal repo info
         if (structureContext.contains("Repository: ")) {
             String repoUrl = structureContext.substring(
-                structureContext.indexOf("Repository: "), 
-                structureContext.indexOf("\n", structureContext.indexOf("Repository: "))
-            );
+                    structureContext.indexOf("Repository: "),
+                    structureContext.indexOf("\n", structureContext.indexOf("Repository: ")));
             apiCtx.append(repoUrl).append("\n\n");
         }
-        
+
         // Extract ONLY the "API ROUTES & ENDPOINTS" section
         if (semanticContext != null && semanticContext.contains("═══ API ROUTES & ENDPOINTS ═══")) {
             String apiChunks = semanticContext.substring(semanticContext.indexOf("═══ API ROUTES & ENDPOINTS ═══"));
@@ -435,17 +434,23 @@ public class LivingWikiService {
             apiCtx.append("─── Code Analysis ───\n");
             apiCtx.append(semanticContext != null ? semanticContext : "No code chunks available");
         }
-        
+
         return apiCtx.toString();
     }
 
     /**
      * Generate a single documentation file with focused context.
+     * For api-reference.md, splits into batches to avoid token limits.
      * Returns the file content as a plain string (not wrapped in delimiters).
      */
     private String generateSingleFile(String fileName, String focusedContext, Map<String, Object> provider) {
         log.info("[LivingWiki] Generating {} with context size: {} chars", fileName, focusedContext.length());
-        
+
+        // Special handling for API Reference - split into batches if too large
+        if ("api-reference.md".equals(fileName) && focusedContext.length() > 20000) {
+            return generateApiReferenceBatched(focusedContext, provider);
+        }
+
         try {
             if (provider != null) {
                 String response = callAiForSingleFile(fileName, focusedContext, provider);
@@ -453,7 +458,7 @@ public class LivingWikiService {
                     return cleanSingleFileResponse(response);
                 }
             }
-            
+
             // Fallback to Gemini
             if (geminiApiKey != null && !geminiApiKey.isBlank()) {
                 String response = callGeminiForSingleFile(fileName, focusedContext);
@@ -464,25 +469,339 @@ public class LivingWikiService {
         } catch (Exception e) {
             log.warn("[LivingWiki] Failed to generate {}: {}", fileName, e.getMessage());
         }
-        
+
         return null;
     }
 
     /**
-     * Remove any ===FILE:=== delimiters or markdown code blocks from single file response.
+     * Generate API Reference in batches to avoid token limits.
+     * Splits API route chunks into smaller batches, generates each separately, then combines.
      */
-    private String cleanSingleFileResponse(String response) {
+    private String generateApiReferenceBatched(String apiContext, Map<String, Object> provider) {
+        log.info("[LivingWiki] API context too large ({}chars), splitting into batches", apiContext.length());
+
+        try {
+            // Extract repository URL
+            String repoUrl = "";
+            if (apiContext.contains("Repository: ")) {
+                int start = apiContext.indexOf("Repository: ");
+                int end = apiContext.indexOf("\n", start);
+                if (end > start) {
+                    repoUrl = apiContext.substring(start, end);
+                }
+            }
+
+            // Extract API chunks section
+            String apiChunksSection = "";
+            if (apiContext.contains("═══ API ROUTES & ENDPOINTS ═══")) {
+                apiChunksSection = apiContext.substring(apiContext.indexOf("═══ API ROUTES & ENDPOINTS ═══"));
+            }
+
+            // Split into individual code chunks
+            List<String> chunks = splitIntoCodeChunks(apiChunksSection);
+            log.info("[LivingWiki] Found {} API code chunks to process", chunks.size());
+
+            if (chunks.isEmpty()) {
+                return generateSingleFileDirect("api-reference.md", apiContext, provider);
+            }
+
+            // Calculate batch size (aim for ~12KB per batch = ~3000 tokens)
+            int maxCharsPerBatch = 12000;
+            List<List<String>> batches = createBatches(chunks, maxCharsPerBatch);
+            log.info("[LivingWiki] Created {} batches for API reference generation", batches.size());
+
+            // Generate documentation for each batch
+            StringBuilder combinedApiDocs = new StringBuilder();
+            combinedApiDocs.append("# API Reference\n\n");
+            combinedApiDocs.append("## Authentication\n\n");
+            combinedApiDocs.append("To be documented based on authentication mechanisms in code.\n\n");
+            combinedApiDocs.append("## Base URL\n\n");
+            combinedApiDocs.append("```\nProduction: https://api.example.com\nDevelopment: http://localhost:8080/api\n```\n\n");
+            combinedApiDocs.append("## Endpoints\n\n");
+
+            for (int i = 0; i < batches.size(); i++) {
+                log.info("[LivingWiki] Processing batch {}/{} ({} chunks)", 
+                    i + 1, batches.size(), batches.get(i).size());
+
+                String batchContext = repoUrl + "\n\n" + 
+                    "═══ API ROUTES & ENDPOINTS (Batch " + (i + 1) + "/" + batches.size() + ") ═══\n" +
+                    String.join("\n", batches.get(i));
+
+                String batchResult = generateApiBatchDocumentation(batchContext, provider, i + 1, batches.size());
+                
+                if (batchResult != null && !batchResult.isBlank()) {
+                    combinedApiDocs.append(batchResult).append("\n\n");
+                    log.info("[LivingWiki] ✓ Batch {}/{} processed successfully", i + 1, batches.size());
+                } else {
+                    log.warn("[LivingWiki] ✗ Batch {}/{} failed, skipping", i + 1, batches.size());
+                }
+
+                // Small delay between batches to avoid rate limits
+                if (i < batches.size() - 1) {
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+
+            String finalDoc = combinedApiDocs.toString();
+            log.info("[LivingWiki] ✓ Combined API reference generated ({} chars)", finalDoc.length());
+            return finalDoc;
+
+        } catch (Exception e) {
+            log.error("[LivingWiki] Failed to generate batched API reference: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Split code chunks string into individual chunks.
+     */
+    private List<String> splitIntoCodeChunks(String apiChunksSection) {
+        List<String> chunks = new ArrayList<>();
+        if (apiChunksSection == null || apiChunksSection.isBlank()) {
+            return chunks;
+        }
+
+        // Split by chunk markers: "// filepath (chunk N)"
+        String[] parts = apiChunksSection.split("\n// ");
+        for (String part : parts) {
+            if (!part.trim().isEmpty() && !part.contains("═══ API ROUTES")) {
+                chunks.add("// " + part.trim());
+            }
+        }
+
+        return chunks;
+    }
+
+    /**
+     * Create batches from chunks, ensuring no batch exceeds maxCharsPerBatch.
+     */
+    private List<List<String>> createBatches(List<String> chunks, int maxCharsPerBatch) {
+        List<List<String>> batches = new ArrayList<>();
+        List<String> currentBatch = new ArrayList<>();
+        int currentBatchSize = 0;
+
+        for (String chunk : chunks) {
+            int chunkSize = chunk.length();
+
+            if (currentBatchSize + chunkSize > maxCharsPerBatch && !currentBatch.isEmpty()) {
+                // Current batch is full, start a new one
+                batches.add(new ArrayList<>(currentBatch));
+                currentBatch.clear();
+                currentBatchSize = 0;
+            }
+
+            currentBatch.add(chunk);
+            currentBatchSize += chunkSize;
+        }
+
+        // Add remaining batch
+        if (!currentBatch.isEmpty()) {
+            batches.add(currentBatch);
+        }
+
+        return batches;
+    }
+
+    /**
+     * Generate documentation for a single batch of API endpoints.
+     */
+    private String generateApiBatchDocumentation(String batchContext, Map<String, Object> provider, 
+                                                   int batchNum, int totalBatches) {
+        String prompt = buildApiBatchPrompt(batchContext, batchNum, totalBatches);
+
+        try {
+            if (provider != null) {
+                String response = callAiForBatch(prompt, provider);
+                if (response != null && !response.isBlank()) {
+                    return cleanBatchResponse(response);
+                }
+            }
+
+            // Fallback to Gemini
+            if (geminiApiKey != null && !geminiApiKey.isBlank()) {
+                String response = callGeminiForBatch(prompt);
+                if (response != null && !response.isBlank()) {
+                    return cleanBatchResponse(response);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[LivingWiki] Batch {}/{} failed: {}", batchNum, totalBatches, e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Build prompt for a batch of API endpoints.
+     */
+    private String buildApiBatchPrompt(String batchContext, int batchNum, int totalBatches) {
+        return """
+                You are documenting API endpoints (batch %d of %d).
+                
+                **CRITICAL: Extract endpoints from code. Use EXACT paths. DO NOT hallucinate.**
+                
+                For EACH endpoint in this batch:
+                
+                ### [HTTP METHOD] [EXACT PATH]
+                
+                **Description:** What this endpoint does
+                
+                **Authentication:** Yes/No (if you see auth decorators/middleware)
+                
+                **Parameters:**
+                | Name | Type | Location | Required | Description |
+                |------|------|----------|----------|-------------|
+                | ... | ... | ... | ... | ... |
+                
+                **Request Body:** (if POST/PUT/PATCH)
+                ```json
+                {
+                  "field": "value"
+                }
+                ```
+                
+                **Response (200):**
+                ```json
+                {
+                  "result": "success"
+                }
+                ```
+                
+                **Errors:** 400 Bad Request, 401 Unauthorized, 404 Not Found
+                
+                ---
+                
+                **Code to analyze:**
+                %s
+                
+                Output ONLY endpoint documentation (no headers, no "# API Reference" title).
+                """.formatted(batchNum, totalBatches, batchContext);
+    }
+
+    /**
+     * Call AI provider for batch processing (smaller context).
+     */
+    private String callAiForBatch(String prompt, Map<String, Object> provider) {
+        String providerName = (String) provider.get("name");
+        String apiKey = (String) provider.get("apiKey");
+        String baseUrl = (String) provider.get("baseUrl");
+        String model = (String) provider.get("model");
+
+        if ("Groq".equals(providerName) || "OpenAI".equals(providerName) || 
+            "XAI".equals(providerName) || "LMStudio".equals(providerName)) {
+            
+            String url = switch (providerName) {
+                case "Groq" -> "https://api.groq.com/openai/v1/chat/completions";
+                case "XAI" -> "https://api.x.ai/v1/chat/completions";
+                case "OpenAI" -> "https://api.openai.com/v1/chat/completions";
+                default -> (baseUrl != null ? baseUrl : "http://localhost:1234") + "/v1/chat/completions";
+            };
+
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("model", model != null && !model.isBlank() ? model : "llama3");
+            request.put("messages", List.of(Map.of("role", "user", "content", prompt)));
+            request.put("max_tokens", 2000); // Smaller for batches
+            request.put("temperature", 0.3);
+
+            HttpHeaders headers = new HttpHeaders();
+            if (apiKey != null && !apiKey.isBlank())
+                headers.setBearerAuth(apiKey);
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            return extractReply(
+                restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class),
+                providerName);
+        }
+
+        if ("Google".equals(providerName) || "Gemini".equals(providerName)) {
+            return callGeminiForBatch(prompt);
+        }
+
+        throw new RuntimeException("Unsupported provider for batch: " + providerName);
+    }
+
+    /**
+     * Call Gemini for batch processing.
+     */
+    @SuppressWarnings("unchecked")
+    private String callGeminiForBatch(String prompt) {
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
+                + geminiApiKey;
+        Map<String, Object> body = Map.of(
+                "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, 
+                new HttpEntity<>(body, headers), Map.class);
+
+        var candidates = (List<Map<String, Object>>) response.getBody().get("candidates");
+        var parts = (List<Map<String, Object>>) ((Map<String, Object>) candidates.get(0).get("content"))
+                .get("parts");
+        return (String) parts.get(0).get("text");
+    }
+
+    /**
+     * Clean batch response (remove any extra formatting).
+     */
+    private String cleanBatchResponse(String response) {
         if (response == null) return "";
         
+        // Remove any markdown wrappers
+        response = response.replaceAll("^```[a-z]*\\s*", "");
+        response = response.replaceAll("```\\s*$", "");
+        
+        // Remove "# API Reference" or similar headers if present
+        response = response.replaceAll("(?m)^#\\s*API\\s*Reference\\s*$", "");
+        response = response.replaceAll("(?m)^##\\s*Endpoints\\s*$", "");
+        
+        return response.trim();
+    }
+
+    /**
+     * Direct file generation (fallback for non-batched).
+     */
+    private String generateSingleFileDirect(String fileName, String context, Map<String, Object> provider) {
+        try {
+            if (provider != null) {
+                String response = callAiForSingleFile(fileName, context, provider);
+                if (response != null && !response.isBlank()) {
+                    return cleanSingleFileResponse(response);
+                }
+            }
+
+            if (geminiApiKey != null && !geminiApiKey.isBlank()) {
+                String response = callGeminiForSingleFile(fileName, context);
+                if (response != null && !response.isBlank()) {
+                    return cleanSingleFileResponse(response);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[LivingWiki] Direct generation failed for {}: {}", fileName, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Remove any ===FILE:=== delimiters or markdown code blocks from single file
+     * response.
+     */
+    private String cleanSingleFileResponse(String response) {
+        if (response == null)
+            return "";
+
         // Remove ===FILE: filename=== delimiter if present
         response = response.replaceAll("===FILE:\\s*[^=]+===\\s*", "");
-        
+
         // Remove markdown code block wrappers if present
         if (response.trim().startsWith("```")) {
             response = response.replaceFirst("^```[a-z]*\\s*", "");
             response = response.replaceFirst("```\\s*$", "");
         }
-        
+
         return response.trim();
     }
 
@@ -1304,7 +1623,7 @@ public class LivingWikiService {
      */
     private String callAiForSingleFile(String fileName, String focusedContext, Map<String, Object> provider) {
         String prompt = buildSingleFilePrompt(fileName, focusedContext);
-        
+
         String providerName = (String) provider.get("name");
         String apiKey = (String) provider.get("apiKey");
         String baseUrl = (String) provider.get("baseUrl");
@@ -1313,8 +1632,9 @@ public class LivingWikiService {
         log.info("[LivingWiki] Calling {} for {} (context: {} chars)", providerName, fileName, focusedContext.length());
 
         if ("Ollama".equals(providerName) || "Groq".equals(providerName) || "XAI".equals(providerName)
-                || "OpenAI".equals(providerName) || "LMStudio".equals(providerName) || "Anthropic".equals(providerName)) {
-            
+                || "OpenAI".equals(providerName) || "LMStudio".equals(providerName)
+                || "Anthropic".equals(providerName)) {
+
             String url;
             if ("Groq".equals(providerName))
                 url = "https://api.groq.com/openai/v1/chat/completions";
@@ -1335,12 +1655,12 @@ public class LivingWikiService {
             request.put("messages", List.of(Map.of("role", "user", "content", prompt)));
             request.put("max_tokens", 4000); // Reduced from 8000 since generating only 1 file
             request.put("temperature", 0.3);
-            
+
             HttpHeaders headers = new HttpHeaders();
             if (apiKey != null && !apiKey.isBlank())
                 headers.setBearerAuth(apiKey);
             headers.setContentType(MediaType.APPLICATION_JSON);
-            
+
             return extractReply(
                     restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class),
                     providerName);
@@ -1376,7 +1696,7 @@ public class LivingWikiService {
     @SuppressWarnings("unchecked")
     private String callGeminiForSingleFile(String fileName, String focusedContext) {
         String prompt = buildSingleFilePrompt(fileName, focusedContext);
-        
+
         log.info("[LivingWiki] Calling Gemini for {} (context: {} chars)", fileName, focusedContext.length());
 
         String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
@@ -1402,136 +1722,138 @@ public class LivingWikiService {
         if ("README.md".equals(fileName)) {
             return """
                     You are a senior technical documentation engineer. Generate a comprehensive README.md for this repository.
-                    
+
                     **CRITICAL: Extract information from the code provided below. DO NOT hallucinate.**
-                    
+
                     Generate a README.md with these sections:
-                    
+
                     # Project Title
                     - Descriptive title
                     - Brief description (1-2 sentences)
-                    
+
                     ## Features
                     - Key features (extract from API endpoints in code)
-                    
+
                     ## Tech Stack
                     - Extract from imports/decorators:
                       * Python: `from flask import` → Flask, `from fastapi import` → FastAPI
                       * Java: `import org.springframework` → Spring Boot
                       * JavaScript: `import express` → Express
-                    
+
                     ## Installation
                     ### Prerequisites
                     - Based on detected tech stack
                     ### Installation Steps
                     - Clone, dependencies, configuration
-                    
+
                     ## Usage
                     - Basic usage examples
-                    
+
                     ## Project Structure
                     - Main directories (use actual structure from context)
-                    
+
                     ## Contributing, License, Support
                     - Standard sections
-                    
+
                     **Repository Context:**
                     %s
-                    
+
                     Output ONLY the README.md markdown content (no delimiters, no wrappers).
-                    """.formatted(focusedContext);
-                    
+                    """
+                    .formatted(focusedContext);
+
         } else if ("adr.md".equals(fileName)) {
             return """
                     You are a senior technical documentation engineer. Generate Architecture Decision Records (ADRs) for this repository.
-                    
+
                     **CRITICAL: Use ONLY the GitHub commits, PRs, and issues provided below. DO NOT invent decisions.**
-                    
+
                     Generate 5-10 ADRs using this format for EACH:
-                    
+
                     ### ADR-001: [Decision Title]
-                    
+
                     **Status:** Accepted | Proposed | Deprecated
-                    
+
                     **Context:**
                     - Problem situation
                     - Constraints (technical, business, time)
                     - When decided (use GitHub dates)
                     - Who proposed (use GitHub authors)
-                    
+
                     **Decision:**
                     - What was decided
                     - Alternatives considered
                     - Why this choice
-                    
+
                     **Consequences:**
                     - Positive: Benefits, NFR improvements
                     - Negative: Trade-offs, technical debt
                     - Risks: Future issues
-                    
+
                     **References:**
                     - Link to GitHub commits/PRs/issues
-                    
+
                     ---
-                    
+
                     **ADR Topics:**
                     - Framework choices, database decisions, architecture patterns
                     - Security implementations, performance optimizations
                     - Breaking changes, migrations
-                    
+
                     **GitHub Architecture Data:**
                     %s
-                    
+
                     Output ONLY the adr.md markdown content (no delimiters, no wrappers).
-                    """.formatted(focusedContext);
-                    
+                    """
+                    .formatted(focusedContext);
+
         } else if ("api-reference.md".equals(fileName)) {
             return """
                     You are a senior technical documentation engineer. Generate comprehensive API Reference documentation for this repository.
-                    
+
                     **🚨 CRITICAL: Extract endpoints from the code provided below. PRESERVE EXACT PATHS. DO NOT HALLUCINATE. 🚨**
-                    
+
                     **Analysis Instructions:**
                     1. Find route definitions in code: @app.route("/auth/login"), @app.get("/posts"), @PostMapping("/users")
                     2. Extract HTTP method and path EXACTLY as written
                     3. Extract parameters from function signatures
                     4. Document ONLY endpoints you can SEE in code
-                    
+
                     **Structure:**
-                    
+
                     # [API Name] API Reference
-                    
+
                     ## Authentication
                     - Type: Bearer JWT / API Key / OAuth2
                     - How to obtain
                     - Example
-                    
+
                     ## Base URL
                     - Production: https://...
                     - Development: http://localhost:...
-                    
+
                     ## Endpoints
-                    
+
                     For EACH endpoint found in code:
-                    
+
                     ### [HTTP METHOD] [EXACT PATH FROM CODE]
-                    
+
                     **Description:** What this endpoint does
-                    
+
                     **Authentication Required:** Yes/No
-                    
+
                     **Parameters:**
                     | Name | Type | Location | Required | Description | Example |
                     |------|------|----------|----------|-------------|---------|
                     | param1 | string | path | Yes | ... | ... |
-                    
+
                     **Request Body:** (if POST/PUT/PATCH)
                     ```json
                     {
                       "field": "value"
                     }
                     ```
-                    
+
                     **Success Response (200 OK):**
                     ```json
                     {
@@ -1539,27 +1861,28 @@ public class LivingWikiService {
                       "status": "success"
                     }
                     ```
-                    
+
                     **Error Responses:**
                     - 400 Bad Request: Invalid parameters
                     - 401 Unauthorized: Missing/invalid authentication
                     - 404 Not Found: Resource not found
-                    
+
                     **Example:**
                     ```bash
                     curl -X GET "https://api.example.com/endpoint" \\
                       -H "Authorization: Bearer TOKEN"
                     ```
-                    
+
                     ---
-                    
+
                     **API Routes & Code:**
                     %s
-                    
+
                     Output ONLY the api-reference.md markdown content (no delimiters, no wrappers).
-                    """.formatted(focusedContext);
+                    """
+                    .formatted(focusedContext);
         }
-        
+
         return "Generate documentation for " + fileName + " based on:\n\n" + focusedContext;
     }
 
