@@ -440,15 +440,19 @@ public class LivingWikiService {
 
     /**
      * Generate a single documentation file with focused context.
-     * For api-reference.md, splits into batches to avoid token limits.
+     * For large files (README, API Reference), splits into batches to avoid token limits.
      * Returns the file content as a plain string (not wrapped in delimiters).
      */
     private String generateSingleFile(String fileName, String focusedContext, Map<String, Object> provider) {
         log.info("[LivingWiki] Generating {} with context size: {} chars", fileName, focusedContext.length());
 
-        // Special handling for API Reference - split into batches if too large
-        if ("api-reference.md".equals(fileName) && focusedContext.length() > 20000) {
-            return generateApiReferenceBatched(focusedContext, provider);
+        // Special handling for large files - split into batches
+        if (focusedContext.length() > 20000) {
+            if ("api-reference.md".equals(fileName)) {
+                return generateApiReferenceBatched(focusedContext, provider);
+            } else if ("README.md".equals(fileName)) {
+                return generateReadmeBatched(focusedContext, provider);
+            }
         }
 
         try {
@@ -536,10 +540,12 @@ public class LivingWikiService {
                     log.warn("[LivingWiki] ✗ Batch {}/{} failed, skipping", i + 1, batches.size());
                 }
 
-                // Small delay between batches to avoid rate limits
+                // Delay between batches to respect rate limits
+                // Groq free tier: 6000 TPM, batches use ~3000 tokens, need ~30s between requests
                 if (i < batches.size() - 1) {
                     try {
-                        Thread.sleep(500);
+                        log.info("[LivingWiki] Waiting 25s before next batch to respect rate limits...");
+                        Thread.sleep(25000); // 25 seconds
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
@@ -554,6 +560,183 @@ public class LivingWikiService {
             log.error("[LivingWiki] Failed to generate batched API reference: {}", e.getMessage(), e);
             return null;
         }
+    }
+
+    /**
+     * Generate README.md in batches to avoid token limits.
+     * Splits code chunks into smaller batches, generates each separately, then combines.
+     */
+    private String generateReadmeBatched(String readmeContext, Map<String, Object> provider) {
+        log.info("[LivingWiki] README context too large ({}chars), splitting into batches", readmeContext.length());
+
+        try {
+            // Extract repository structure (small part)
+            String repoStructure = "";
+            if (readmeContext.contains("Repository: ")) {
+                int end = readmeContext.indexOf("─── Representative Code Samples ───");
+                if (end > 0) {
+                    repoStructure = readmeContext.substring(0, end).trim();
+                } else {
+                    // Fallback: take first 2000 chars
+                    repoStructure = readmeContext.substring(0, Math.min(2000, readmeContext.length()));
+                }
+            }
+
+            // Extract code samples section
+            String codeSamplesSection = "";
+            if (readmeContext.contains("─── Representative Code Samples ───")) {
+                codeSamplesSection = readmeContext.substring(
+                    readmeContext.indexOf("─── Representative Code Samples ───"));
+            }
+
+            // Split into individual code chunks
+            List<String> chunks = splitIntoCodeChunks(codeSamplesSection);
+            log.info("[LivingWiki] Found {} code chunks for README", chunks.size());
+
+            if (chunks.isEmpty()) {
+                // If no chunks, try direct generation with truncated context
+                String truncated = readmeContext.substring(0, Math.min(15000, readmeContext.length()));
+                return generateSingleFileDirect("README.md", truncated, provider);
+            }
+
+            // Calculate batch size (aim for ~12KB per batch)
+            int maxCharsPerBatch = 12000;
+            List<List<String>> batches = createBatches(chunks, maxCharsPerBatch);
+            log.info("[LivingWiki] Created {} batches for README generation", batches.size());
+
+            // For README, we'll generate sections and combine
+            StringBuilder combinedReadme = new StringBuilder();
+            
+            // Generate header with repository structure (always first)
+            String headerBatch = repoStructure.length() > 15000 
+                ? repoStructure.substring(0, 15000) : repoStructure;
+            String header = generateReadmeHeader(headerBatch, provider);
+            if (header != null && !header.isBlank()) {
+                combinedReadme.append(header).append("\n\n");
+                log.info("[LivingWiki] ✓ README header generated");
+            }
+
+            // Generate tech stack analysis from code chunks
+            for (int i = 0; i < Math.min(batches.size(), 2); i++) { // Max 2 batches for tech details
+                log.info("[LivingWiki] Processing README batch {}/{} ({} chunks)", 
+                    i + 1, batches.size(), batches.get(i).size());
+
+                String batchContext = "Repository Structure:\n" + repoStructure + "\n\n" +
+                    "Code Samples (Batch " + (i + 1) + "):\n" +
+                    String.join("\n", batches.get(i));
+
+                String batchResult = generateReadmeBatchContent(batchContext, provider, i + 1);
+                
+                if (batchResult != null && !batchResult.isBlank()) {
+                    combinedReadme.append(batchResult).append("\n\n");
+                    log.info("[LivingWiki] ✓ README batch {}/{} processed successfully", i + 1, batches.size());
+                } else {
+                    log.warn("[LivingWiki] ✗ README batch {}/{} failed, skipping", i + 1, batches.size());
+                }
+
+                // Delay between batches
+                if (i < Math.min(batches.size(), 2) - 1) {
+                    try {
+                        log.info("[LivingWiki] Waiting 25s before next batch to respect rate limits...");
+                        Thread.sleep(25000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+
+            String finalDoc = combinedReadme.toString();
+            log.info("[LivingWiki] ✓ Combined README generated ({} chars)", finalDoc.length());
+            return finalDoc;
+
+        } catch (Exception e) {
+            log.error("[LivingWiki] Failed to generate batched README: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Generate README header with title, description, and main sections.
+     */
+    private String generateReadmeHeader(String repoStructure, Map<String, Object> provider) {
+        String prompt = """
+                Generate a comprehensive README.md header for this repository.
+                
+                Include these sections:
+                
+                # Project Title
+                - Descriptive title (extract from repo structure)
+                - Brief 1-2 sentence description
+                
+                ## Table of Contents
+                - Links to main sections
+                
+                ## Features
+                - Key features (infer from structure)
+                
+                ## Project Structure
+                - Main directories and their purpose (USE ONLY the structure provided)
+                
+                Repository Info:
+                %s
+                
+                Output markdown (no delimiters). Focus on structure overview.
+                """.formatted(repoStructure);
+
+        try {
+            if (provider != null) {
+                return cleanBatchResponse(callAiForBatch(prompt, provider));
+            }
+            if (geminiApiKey != null && !geminiApiKey.isBlank()) {
+                return cleanBatchResponse(callGeminiForBatch(prompt));
+            }
+        } catch (Exception e) {
+            log.warn("[LivingWiki] README header generation failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Generate additional README content from code batch.
+     */
+    private String generateReadmeBatchContent(String batchContext, Map<String, Object> provider, int batchNum) {
+        String prompt = """
+                Extract technical details from this code (batch %d for README.md).
+                
+                **CRITICAL: Extract ONLY from code provided. DO NOT hallucinate.**
+                
+                Generate these sections:
+                
+                ## Tech Stack
+                - Identify from imports/decorators:
+                  * Python: `from flask import` → Flask
+                  * Java: `import org.springframework` → Spring Boot
+                  * JavaScript: `import express` → Express
+                
+                ## Installation
+                - Prerequisites (based on detected tech)
+                - Installation steps
+                
+                ## Usage
+                - Basic usage examples (if evident from code)
+                
+                Code Analysis:
+                %s
+                
+                Output markdown (no delimiters). Extract factual information only.
+                """.formatted(batchNum, batchContext);
+
+        try {
+            if (provider != null) {
+                return cleanBatchResponse(callAiForBatch(prompt, provider));
+            }
+            if (geminiApiKey != null && !geminiApiKey.isBlank()) {
+                return cleanBatchResponse(callGeminiForBatch(prompt));
+            }
+        } catch (Exception e) {
+            log.warn("[LivingWiki] README batch {} failed: {}", batchNum, e.getMessage());
+        }
+        return null;
     }
 
     /**
