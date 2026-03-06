@@ -1,5 +1,8 @@
 package ai.mindvex.backend.service;
 
+import ai.mindvex.backend.dto.EndpointParameter;
+import ai.mindvex.backend.dto.ErrorResponse;
+import ai.mindvex.backend.dto.ExtractedEndpoint;
 import ai.mindvex.backend.entity.User;
 import ai.mindvex.backend.entity.VectorEmbedding;
 import ai.mindvex.backend.repository.FileDependencyRepository;
@@ -36,6 +39,7 @@ public class LivingWikiService {
     private final EmbeddingIngestionService embeddingService;
     private final UserRepository userRepository;
     private final GitHubApiService githubApiService;
+    private final DataCleaningService dataCleaningService;
     private final RestTemplate restTemplate = new RestTemplate();
 
     @Value("${gemini.api-key:#{null}}")
@@ -491,12 +495,14 @@ public class LivingWikiService {
     }
 
     /**
-     * Generate API Reference in batches to avoid token limits.
-     * Splits API route chunks into smaller batches, generates each separately, then
-     * combines.
+     * Generate API Reference with two-stage approach:
+     * Stage 1: Extract endpoints into structured data and clean/deduplicate
+     * Stage 2: Generate markdown from cleaned data
+     * 
+     * This ensures consistency and removes redundancy before final formatting.
      */
     private String generateApiReferenceBatched(String apiContext, Map<String, Object> provider) {
-        log.info("[LivingWiki] API context too large ({}chars), splitting into batches", apiContext.length());
+        log.info("[LivingWiki] API context too large ({}chars), using two-stage approach", apiContext.length());
 
         try {
             // Extract repository URL
@@ -523,61 +529,216 @@ public class LivingWikiService {
                 return generateSingleFileDirect("api-reference.md", apiContext, provider);
             }
 
-            // Calculate batch size (aim for ~8KB per batch = ~2000 tokens, stays well under
-            // 6K TPM)
+            // ═══════════════════════════════════════════════════════════════════════════
+            // STAGE 1: EXTRACT ENDPOINTS INTO STRUCTURED DATA
+            // ═══════════════════════════════════════════════════════════════════════════
+            
+            log.info("[LivingWiki] [Stage 1] Extracting and cleaning endpoints from {} chunks", chunks.size());
+            
+            // Calculate batch size for extraction (smaller for rate limits)
             int maxCharsPerBatch = 8000;
             List<List<String>> batches = createBatches(chunks, maxCharsPerBatch);
-            log.info("[LivingWiki] Created {} batches for API reference generation", batches.size());
+            log.info("[LivingWiki] Created {} batches for endpoint extraction", batches.size());
 
-            // Generate documentation for each batch
-            StringBuilder combinedApiDocs = new StringBuilder();
-            combinedApiDocs.append("# API Reference\n\n");
-            combinedApiDocs.append("## Authentication\n\n");
-            combinedApiDocs.append("To be documented based on authentication mechanisms in code.\n\n");
-            combinedApiDocs.append("## Base URL\n\n");
-            combinedApiDocs.append(
-                    "```\nProduction: https://api.example.com\nDevelopment: http://localhost:8080/api\n```\n\n");
-            combinedApiDocs.append("## Endpoints\n\n");
-
+            // Extract endpoints from each batch
+            List<ExtractedEndpoint> allEndpoints = new ArrayList<>();
+            
             for (int i = 0; i < batches.size(); i++) {
-                log.info("[LivingWiki] Processing batch {}/{} ({} chunks)",
-                        i + 1, batches.size(), batches.get(i).size());
+                log.info("[LivingWiki] [Stage 1] Extracting from batch {}/{}", i + 1, batches.size());
 
-                String batchContext = repoUrl + "\n\n" +
-                        "═══ API ROUTES & ENDPOINTS (Batch " + (i + 1) + "/" + batches.size() + ") ═══\n" +
-                        String.join("\n", batches.get(i));
-
-                String batchResult = generateApiBatchDocumentation(batchContext, provider, i + 1, batches.size());
-
-                if (batchResult != null && !batchResult.isBlank()) {
-                    combinedApiDocs.append(batchResult).append("\n\n");
-                    log.info("[LivingWiki] ✓ Batch {}/{} processed successfully", i + 1, batches.size());
+                String batchContext = String.join("\n", batches.get(i));
+                
+                // Use DataCleaningService to extract structured endpoints
+                List<ExtractedEndpoint> batchEndpoints = dataCleaningService.extractEndpointsFromChunks(
+                    batchContext, provider);
+                
+                if (!batchEndpoints.isEmpty()) {
+                    allEndpoints.addAll(batchEndpoints);
+                    log.info("[LivingWiki] ✓ Extracted {} endpoints from batch {}/{}", 
+                        batchEndpoints.size(), i + 1, batches.size());
                 } else {
-                    log.warn("[LivingWiki] ✗ Batch {}/{} failed, skipping", i + 1, batches.size());
+                    log.warn("[LivingWiki] ✗ No endpoints extracted from batch {}/{}", i + 1, batches.size());
                 }
 
                 // Delay between batches to respect rate limits
-                // Groq free tier: 6000 TPM with sliding 1-minute window
-                // Previous batches (README, ADR) may still be in window
-                // 60s delay ensures previous tokens expire from sliding window
                 if (i < batches.size() - 1) {
                     try {
-                        log.info(
-                                "[LivingWiki] Waiting 60s before next batch to respect rate limits (sliding window)...");
-                        Thread.sleep(60000); // 60 seconds
+                        log.info("[LivingWiki] Waiting 60s before next extraction batch (sliding window)...");
+                        Thread.sleep(60000);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
                 }
             }
 
-            String finalDoc = combinedApiDocs.toString();
-            log.info("[LivingWiki] ✓ Combined API reference generated ({} chars)", finalDoc.length());
+            log.info("[LivingWiki] [Stage 1] Extracted total of {} endpoints (before cleaning)", allEndpoints.size());
+
+            // Clean and deduplicate endpoints
+            List<ExtractedEndpoint> cleanedEndpoints = dataCleaningService.cleanAndDeduplicateEndpoints(allEndpoints);
+            log.info("[LivingWiki] [Stage 1] Cleaned to {} unique endpoints", cleanedEndpoints.size());
+
+            if (cleanedEndpoints.isEmpty()) {
+                log.warn("[LivingWiki] No clean endpoints found, falling back to direct generation");
+                return generateSingleFileDirect("api-reference.md", apiContext, provider);
+            }
+
+            // ═══════════════════════════════════════════════════════════════════════════
+            // STAGE 2: GENERATE MARKDOWN FROM CLEANED DATA
+            // ═══════════════════════════════════════════════════════════════════════════
+
+            log.info("[LivingWiki] [Stage 2] Generating markdown from {} cleaned endpoints", cleanedEndpoints.size());
+
+            StringBuilder apiReference = new StringBuilder();
+            
+            // Header
+            apiReference.append("# API Reference\n\n");
+            
+            // Authentication section
+            boolean hasAuthEndpoints = cleanedEndpoints.stream().anyMatch(ExtractedEndpoint::isRequiresAuth);
+            apiReference.append("## Authentication\n\n");
+            if (hasAuthEndpoints) {
+                apiReference.append("This API uses authentication for protected endpoints. ");
+                apiReference.append("Include authentication credentials in requests to protected endpoints.\n\n");
+            } else {
+                apiReference.append("Authentication requirements will be documented for each endpoint.\n\n");
+            }
+            
+            // Base URL section
+            apiReference.append("## Base URL\n\n");
+            apiReference.append("```\n");
+            apiReference.append("Production: https://api.example.com\n");
+            apiReference.append("Development: http://localhost:8080/api\n");
+            apiReference.append("```\n\n");
+            
+            // Endpoints section
+            apiReference.append("## Endpoints\n\n");
+            
+            // Group endpoints by prefix/category
+            Map<String, List<ExtractedEndpoint>> groupedEndpoints = cleanedEndpoints.stream()
+                .collect(Collectors.groupingBy(e -> 
+                    e.getRouterPrefix() != null ? e.getRouterPrefix() : "General",
+                    LinkedHashMap::new,
+                    Collectors.toList()
+                ));
+            
+            // Generate documentation for each group
+            for (Map.Entry<String, List<ExtractedEndpoint>> group : groupedEndpoints.entrySet()) {
+                String category = group.getKey();
+                List<ExtractedEndpoint> endpoints = group.getValue();
+                
+                apiReference.append("### ").append(formatCategoryName(category)).append("\n\n");
+                
+                for (ExtractedEndpoint endpoint : endpoints) {
+                    apiReference.append(formatEndpointMarkdown(endpoint));
+                }
+            }
+
+            String finalDoc = apiReference.toString();
+            log.info("[LivingWiki] ✓ API reference generated ({} chars, {} endpoints)", 
+                finalDoc.length(), cleanedEndpoints.size());
             return finalDoc;
 
         } catch (Exception e) {
             log.error("[LivingWiki] Failed to generate batched API reference: {}", e.getMessage(), e);
             return null;
+        }
+    }
+    
+    /**
+     * Format category name for display
+     */
+    private String formatCategoryName(String category) {
+        if ("General".equals(category)) {
+            return "General Endpoints";
+        }
+        // Remove leading slash and capitalize
+        String formatted = category.startsWith("/") ? category.substring(1) : category;
+        return formatted.substring(0, 1).toUpperCase() + formatted.substring(1) + " Endpoints";
+    }
+    
+    /**
+     * Format a single endpoint as markdown
+     */
+    private String formatEndpointMarkdown(ExtractedEndpoint endpoint) {
+        StringBuilder md = new StringBuilder();
+        
+        // Endpoint title
+        md.append("#### ").append(endpoint.getMethod()).append(" ").append(endpoint.getPath()).append("\n\n");
+        
+        // Description
+        md.append("**Description:** ").append(endpoint.getDescription()).append("\n\n");
+        
+        // Authentication
+        md.append("**Authentication:** ").append(endpoint.isRequiresAuth() ? "Required" : "Not required").append("\n\n");
+        
+        // Parameters
+        if (endpoint.getParameters() != null && !endpoint.getParameters().isEmpty()) {
+            md.append("**Parameters:**\n\n");
+            md.append("| Name | Type | Location | Required | Description |\n");
+            md.append("|------|------|----------|----------|-------------|\n");
+            
+            for (EndpointParameter param : endpoint.getParameters()) {
+                md.append("| ").append(param.getName())
+                  .append(" | ").append(param.getType() != null ? param.getType() : "string")
+                  .append(" | ").append(param.getLocation() != null ? param.getLocation() : "query")
+                  .append(" | ").append(param.isRequired() ? "Yes" : "No")
+                  .append(" | ").append(param.getDescription() != null ? param.getDescription() : "-")
+                  .append(" |\n");
+            }
+            md.append("\n");
+        }
+        
+        // Request body
+        if (endpoint.getRequestBody() != null && !endpoint.getRequestBody().isBlank()) {
+            md.append("**Request Body:**\n\n");
+            md.append("```json\n");
+            md.append(formatJson(endpoint.getRequestBody()));
+            md.append("\n```\n\n");
+        }
+        
+        // Response
+        if (endpoint.getResponseBody() != null && !endpoint.getResponseBody().isBlank()) {
+            md.append("**Response (200):**\n\n");
+            md.append("```json\n");
+            md.append(formatJson(endpoint.getResponseBody()));
+            md.append("\n```\n\n");
+        }
+        
+        // Error responses
+        if (endpoint.getErrorResponses() != null && !endpoint.getErrorResponses().isEmpty()) {
+            md.append("**Error Responses:**\n\n");
+            for (ErrorResponse error : endpoint.getErrorResponses()) {
+                md.append("**").append(error.getCode()).append(" ").append(error.getName()).append(":**\n");
+                if (error.getDescription() != null) {
+                    md.append(error.getDescription()).append("\n");
+                }
+                if (error.getExample() != null && !error.getExample().isBlank()) {
+                    md.append("```json\n");
+                    md.append(formatJson(error.getExample()));
+                    md.append("\n```\n");
+                }
+                md.append("\n");
+            }
+        }
+        
+        md.append("---\n\n");
+        
+        return md.toString();
+    }
+    
+    /**
+     * Format JSON string with proper indentation
+     */
+    private String formatJson(String json) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            Object obj = mapper.readValue(json, Object.class);
+            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
+        } catch (Exception e) {
+            // If parsing fails, return as-is
+            return json;
+        }
+    }
         }
     }
 
