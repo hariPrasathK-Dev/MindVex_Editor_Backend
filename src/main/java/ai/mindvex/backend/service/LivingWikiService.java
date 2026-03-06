@@ -185,7 +185,7 @@ public class LivingWikiService {
                                 boolean isRouteFile = filePath.contains("route") || filePath.contains("controller")
                                         || filePath.contains("endpoint") || filePath.contains("api")
                                         || filePath.contains("view") || filePath.contains("handler");
-                                
+
                                 // Main files often contain router registration - preserve them fully
                                 boolean isMainFile = filePath.contains("main.py") || filePath.contains("app.py")
                                         || filePath.contains("__init__.py") || filePath.contains("index.ts")
@@ -452,7 +452,8 @@ public class LivingWikiService {
 
     /**
      * Generate a single documentation file with focused context.
-     * For large files (README, API Reference), splits into batches to avoid token limits.
+     * For large files (README, API Reference), splits into batches to avoid token
+     * limits.
      * Returns the file content as a plain string (not wrapped in delimiters).
      */
     private String generateSingleFile(String fileName, String focusedContext, Map<String, Object> provider) {
@@ -491,7 +492,8 @@ public class LivingWikiService {
 
     /**
      * Generate API Reference in batches to avoid token limits.
-     * Splits API route chunks into smaller batches, generates each separately, then combines.
+     * Splits API route chunks into smaller batches, generates each separately, then
+     * combines.
      */
     private String generateApiReferenceBatched(String apiContext, Map<String, Object> provider) {
         log.info("[LivingWiki] API context too large ({}chars), splitting into batches", apiContext.length());
@@ -521,7 +523,8 @@ public class LivingWikiService {
                 return generateSingleFileDirect("api-reference.md", apiContext, provider);
             }
 
-            // Calculate batch size (aim for ~8KB per batch = ~2000 tokens, stays well under 6K TPM)
+            // Calculate batch size (aim for ~8KB per batch = ~2000 tokens, stays well under
+            // 6K TPM)
             int maxCharsPerBatch = 8000;
             List<List<String>> batches = createBatches(chunks, maxCharsPerBatch);
             log.info("[LivingWiki] Created {} batches for API reference generation", batches.size());
@@ -532,19 +535,20 @@ public class LivingWikiService {
             combinedApiDocs.append("## Authentication\n\n");
             combinedApiDocs.append("To be documented based on authentication mechanisms in code.\n\n");
             combinedApiDocs.append("## Base URL\n\n");
-            combinedApiDocs.append("```\nProduction: https://api.example.com\nDevelopment: http://localhost:8080/api\n```\n\n");
+            combinedApiDocs.append(
+                    "```\nProduction: https://api.example.com\nDevelopment: http://localhost:8080/api\n```\n\n");
             combinedApiDocs.append("## Endpoints\n\n");
 
             for (int i = 0; i < batches.size(); i++) {
-                log.info("[LivingWiki] Processing batch {}/{} ({} chunks)", 
-                    i + 1, batches.size(), batches.get(i).size());
+                log.info("[LivingWiki] Processing batch {}/{} ({} chunks)",
+                        i + 1, batches.size(), batches.get(i).size());
 
-                String batchContext = repoUrl + "\n\n" + 
-                    "═══ API ROUTES & ENDPOINTS (Batch " + (i + 1) + "/" + batches.size() + ") ═══\n" +
-                    String.join("\n", batches.get(i));
+                String batchContext = repoUrl + "\n\n" +
+                        "═══ API ROUTES & ENDPOINTS (Batch " + (i + 1) + "/" + batches.size() + ") ═══\n" +
+                        String.join("\n", batches.get(i));
 
                 String batchResult = generateApiBatchDocumentation(batchContext, provider, i + 1, batches.size());
-                
+
                 if (batchResult != null && !batchResult.isBlank()) {
                     combinedApiDocs.append(batchResult).append("\n\n");
                     log.info("[LivingWiki] ✓ Batch {}/{} processed successfully", i + 1, batches.size());
@@ -558,7 +562,8 @@ public class LivingWikiService {
                 // 60s delay ensures previous tokens expire from sliding window
                 if (i < batches.size() - 1) {
                     try {
-                        log.info("[LivingWiki] Waiting 60s before next batch to respect rate limits (sliding window)...");
+                        log.info(
+                                "[LivingWiki] Waiting 60s before next batch to respect rate limits (sliding window)...");
                         Thread.sleep(60000); // 60 seconds
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
@@ -578,7 +583,8 @@ public class LivingWikiService {
 
     /**
      * Generate README.md in batches to avoid token limits.
-     * Splits code chunks into smaller batches, generates each separately, then combines.
+     * Splits code chunks into smaller batches, generates each separately, then
+     * combines.
      */
     private String generateReadmeBatched(String readmeContext, Map<String, Object> provider) {
         log.info("[LivingWiki] README context too large ({}chars), splitting into batches", readmeContext.length());
@@ -600,7 +606,7 @@ public class LivingWikiService {
             String codeSamplesSection = "";
             if (readmeContext.contains("─── Representative Code Samples ───")) {
                 codeSamplesSection = readmeContext.substring(
-                    readmeContext.indexOf("─── Representative Code Samples ───"));
+                        readmeContext.indexOf("─── Representative Code Samples ───"));
             }
 
             // Split into individual code chunks
@@ -620,10 +626,11 @@ public class LivingWikiService {
 
             // For README, we'll generate sections and combine
             StringBuilder combinedReadme = new StringBuilder();
-            
+
             // Generate header with repository structure (always first)
-            String headerBatch = repoStructure.length() > 15000 
-                ? repoStructure.substring(0, 15000) : repoStructure;
+            String headerBatch = repoStructure.length() > 15000
+                    ? repoStructure.substring(0, 15000)
+                    : repoStructure;
             String header = generateReadmeHeader(headerBatch, provider);
             if (header != null && !header.isBlank()) {
                 combinedReadme.append(header).append("\n\n");
@@ -632,15 +639,15 @@ public class LivingWikiService {
 
             // Generate tech stack analysis from code chunks
             for (int i = 0; i < Math.min(batches.size(), 2); i++) { // Max 2 batches for tech details
-                log.info("[LivingWiki] Processing README batch {}/{} ({} chunks)", 
-                    i + 1, batches.size(), batches.get(i).size());
+                log.info("[LivingWiki] Processing README batch {}/{} ({} chunks)",
+                        i + 1, batches.size(), batches.get(i).size());
 
                 String batchContext = "Repository Structure:\n" + repoStructure + "\n\n" +
-                    "Code Samples (Batch " + (i + 1) + "):\n" +
-                    String.join("\n", batches.get(i));
+                        "Code Samples (Batch " + (i + 1) + "):\n" +
+                        String.join("\n", batches.get(i));
 
                 String batchResult = generateReadmeBatchContent(batchContext, provider, i + 1);
-                
+
                 if (batchResult != null && !batchResult.isBlank()) {
                     combinedReadme.append(batchResult).append("\n\n");
                     log.info("[LivingWiki] ✓ README batch {}/{} processed successfully", i + 1, batches.size());
@@ -651,7 +658,8 @@ public class LivingWikiService {
                 // Delay between batches
                 if (i < Math.min(batches.size(), 2) - 1) {
                     try {
-                        log.info("[LivingWiki] Waiting 60s before next batch to respect rate limits (sliding window)...");
+                        log.info(
+                                "[LivingWiki] Waiting 60s before next batch to respect rate limits (sliding window)...");
                         Thread.sleep(60000); // 60 seconds for full TPM window reset
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
@@ -675,25 +683,25 @@ public class LivingWikiService {
     private String generateReadmeHeader(String repoStructure, Map<String, Object> provider) {
         String prompt = """
                 Generate a comprehensive README.md header for this repository.
-                
+
                 Include these sections:
-                
+
                 # Project Title
                 - Descriptive title (extract from repo structure)
                 - Brief 1-2 sentence description
-                
+
                 ## Table of Contents
                 - Links to main sections
-                
+
                 ## Features
                 - Key features (infer from structure)
-                
+
                 ## Project Structure
                 - Main directories and their purpose (USE ONLY the structure provided)
-                
+
                 Repository Info:
                 %s
-                
+
                 Output markdown (no delimiters). Focus on structure overview.
                 """.formatted(repoStructure);
 
@@ -716,27 +724,27 @@ public class LivingWikiService {
     private String generateReadmeBatchContent(String batchContext, Map<String, Object> provider, int batchNum) {
         String prompt = """
                 Extract technical details from this code (batch %d for README.md).
-                
+
                 **CRITICAL: Extract ONLY from code provided. DO NOT hallucinate.**
-                
+
                 Generate these sections:
-                
+
                 ## Tech Stack
                 - Identify from imports/decorators:
                   * Python: `from flask import` → Flask
                   * Java: `import org.springframework` → Spring Boot
                   * JavaScript: `import express` → Express
-                
+
                 ## Installation
                 - Prerequisites (based on detected tech)
                 - Installation steps
-                
+
                 ## Usage
                 - Basic usage examples (if evident from code)
-                
+
                 Code Analysis:
                 %s
-                
+
                 Output markdown (no delimiters). Extract factual information only.
                 """.formatted(batchNum, batchContext);
 
@@ -761,10 +769,10 @@ public class LivingWikiService {
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
                 boolean isRateLimit = errorMsg != null && errorMsg.contains("429");
-                
+
                 if (isRateLimit && attempt < maxRetries) {
-                    log.warn("[LivingWiki] README batch {} rate limited (attempt {}/{}). Retrying in {}s...", 
-                        batchNum, attempt, maxRetries, retryDelay / 1000);
+                    log.warn("[LivingWiki] README batch {} rate limited (attempt {}/{}). Retrying in {}s...",
+                            batchNum, attempt, maxRetries, retryDelay / 1000);
                     try {
                         Thread.sleep(retryDelay);
                         retryDelay *= 2; // Exponential backoff
@@ -833,8 +841,8 @@ public class LivingWikiService {
     /**
      * Generate documentation for a single batch of API endpoints with retry logic.
      */
-    private String generateApiBatchDocumentation(String batchContext, Map<String, Object> provider, 
-                                                   int batchNum, int totalBatches) {
+    private String generateApiBatchDocumentation(String batchContext, Map<String, Object> provider,
+            int batchNum, int totalBatches) {
         String prompt = buildApiBatchPrompt(batchContext, batchNum, totalBatches);
 
         // Retry logic for rate limit errors
@@ -860,10 +868,10 @@ public class LivingWikiService {
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
                 boolean isRateLimit = errorMsg != null && errorMsg.contains("429");
-                
+
                 if (isRateLimit && attempt < maxRetries) {
-                    log.warn("[LivingWiki] Batch {}/{} rate limited (attempt {}/{}). Retrying in {}s...", 
-                        batchNum, totalBatches, attempt, maxRetries, retryDelay / 1000);
+                    log.warn("[LivingWiki] Batch {}/{} rate limited (attempt {}/{}). Retrying in {}s...",
+                            batchNum, totalBatches, attempt, maxRetries, retryDelay / 1000);
                     try {
                         Thread.sleep(retryDelay);
                         retryDelay *= 2; // Exponential backoff
@@ -886,60 +894,61 @@ public class LivingWikiService {
     private String buildApiBatchPrompt(String batchContext, int batchNum, int totalBatches) {
         return """
                 You are documenting API endpoints (batch %d of %d).
-                
+
                 **CRITICAL INSTRUCTIONS - READ CAREFULLY:**
-                
+
                 1. **Router Prefix Detection (MOST IMPORTANT):**
                    - Look for router prefix declarations: `APIRouter(prefix="/auth")`, `Blueprint(url_prefix="/api")`, `@RequestMapping("/users")`
                    - Look for router registration: `app.include_router(router, prefix="/auth")`, `app.register_blueprint(bp, url_prefix="/api")`
                    - COMBINE router prefix + endpoint path to form complete URL
                    - Example: If router has `prefix="/auth"` and endpoint is `@router.post("/login")`, final path is `/auth/login` NOT `/login`
-                
+
                 2. **Extract Real Endpoints:**
                    - Use EXACT paths from code. DO NOT invent or hallucinate endpoints.
                    - Parse decorators: `@app.get("/users")`, `@router.post("/login")`, `@DeleteMapping("/posts/{id}")`
                    - Include path parameters: `{id}`, `{username}`, `{post_id}` exactly as shown
-                
+
                 3. **HTTP Methods:**
                    - GET requests: DO NOT include request body
                    - POST/PUT/PATCH: Include request body if you see it in code
-                
+
                 For EACH endpoint in this batch:
-                
+
                 ### [HTTP METHOD] [COMPLETE PATH WITH PREFIX]
-                
+
                 **Description:** What this endpoint does
-                
+
                 **Authentication:** Yes/No (if you see auth decorators/middleware)
-                
+
                 **Parameters:**
                 | Name | Type | Location | Required | Description |
                 |------|------|----------|----------|-------------|
                 | ... | ... | Path/Query/Header | ... | ... |
-                
+
                 **Request Body:** (if POST/PUT/PATCH)
                 ```json
                 {
                   "field": "value"
                 }
                 ```
-                
+
                 **Response (200):**
                 ```json
                 {
                   "result": "success"
                 }
                 ```
-                
+
                 **Errors:** 400 Bad Request, 401 Unauthorized, 404 Not Found
-                
+
                 ---
-                
+
                 **Code to analyze:**
                 %s
-                
+
                 Output ONLY endpoint documentation (no headers, no "# API Reference" title).
-                """.formatted(batchNum, totalBatches, batchContext);
+                """
+                .formatted(batchNum, totalBatches, batchContext);
     }
 
     /**
@@ -951,9 +960,9 @@ public class LivingWikiService {
         String baseUrl = (String) provider.get("baseUrl");
         String model = (String) provider.get("model");
 
-        if ("Groq".equals(providerName) || "OpenAI".equals(providerName) || 
-            "XAI".equals(providerName) || "LMStudio".equals(providerName)) {
-            
+        if ("Groq".equals(providerName) || "OpenAI".equals(providerName) ||
+                "XAI".equals(providerName) || "LMStudio".equals(providerName)) {
+
             String url = switch (providerName) {
                 case "Groq" -> "https://api.groq.com/openai/v1/chat/completions";
                 case "XAI" -> "https://api.x.ai/v1/chat/completions";
@@ -973,8 +982,8 @@ public class LivingWikiService {
             headers.setContentType(MediaType.APPLICATION_JSON);
 
             return extractReply(
-                restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class),
-                providerName);
+                    restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(request, headers), Map.class),
+                    providerName);
         }
 
         if ("Google".equals(providerName) || "Gemini".equals(providerName)) {
@@ -995,7 +1004,7 @@ public class LivingWikiService {
                 "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, 
+        ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST,
                 new HttpEntity<>(body, headers), Map.class);
 
         var candidates = (List<Map<String, Object>>) response.getBody().get("candidates");
@@ -1008,16 +1017,17 @@ public class LivingWikiService {
      * Clean batch response (remove any extra formatting).
      */
     private String cleanBatchResponse(String response) {
-        if (response == null) return "";
-        
+        if (response == null)
+            return "";
+
         // Remove any markdown wrappers
         response = response.replaceAll("^```[a-z]*\\s*", "");
         response = response.replaceAll("```\\s*$", "");
-        
+
         // Remove "# API Reference" or similar headers if present
         response = response.replaceAll("(?m)^#\\s*API\\s*Reference\\s*$", "");
         response = response.replaceAll("(?m)^##\\s*Endpoints\\s*$", "");
-        
+
         return response.trim();
     }
 
