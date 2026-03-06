@@ -6,15 +6,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.transport.HttpTransport;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
-import org.eclipse.jgit.transport.http.HttpConnectionFactory;
-import org.eclipse.jgit.transport.http.JDKHttpConnectionFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
@@ -78,9 +74,6 @@ public class SourceCodeDependencyExtractor {
             String normalizedUrl = normalizeRepoUrl(repoUrl);
             log.info("[SourceCodeDepExtractor] Normalized repo URL: {}", normalizedUrl);
             log.info("[SourceCodeDepExtractor] Cloning {} into {}", normalizedUrl, tempDir);
-
-            // Configure JGit HTTP settings for large repositories
-            configureHttpSettings();
 
             // Clone with retry logic (up to 3 attempts)
             Git git = cloneWithRetry(normalizedUrl, tempDir, accessToken, 3);
@@ -161,23 +154,6 @@ public class SourceCodeDependencyExtractor {
     }
 
     /**
-     * Configure HTTP settings for JGit to handle large repositories.
-     */
-    private void configureHttpSettings() {
-        HttpConnectionFactory factory = new JDKHttpConnectionFactory() {
-            @Override
-            public HttpURLConnection create(java.net.URL url) throws java.io.IOException {
-                HttpURLConnection connection = super.create(url);
-                // Increase timeouts for large repositories
-                connection.setConnectTimeout(60000); // 60 seconds
-                connection.setReadTimeout(300000);   // 5 minutes
-                return connection;
-            }
-        };
-        HttpTransport.setConnectionFactory(factory);
-    }
-
-    /**
      * Clone repository with retry logic and exponential backoff.
      */
     private Git cloneWithRetry(String repoUrl, Path targetDir, String accessToken, int maxAttempts) 
@@ -204,18 +180,11 @@ public class SourceCodeDependencyExtractor {
                     );
                 }
 
-                // Configure transport to handle large payloads
-                cloneCmd.setTransportConfigCallback(transport -> {
-                    if (transport instanceof HttpTransport) {
-                        ((HttpTransport) transport).setPostBuffer(524288000); // 500 MB buffer
-                    }
-                });
-
                 Git git = cloneCmd.call();
                 log.info("[SourceCodeDepExtractor] Successfully cloned {} on attempt {}", repoUrl, attempt);
                 return git;
 
-            } catch (GitAPIException | IOException e) {
+            } catch (GitAPIException e) {
                 lastException = new IOException("Clone failed on attempt " + attempt + ": " + e.getMessage(), e);
                 log.warn("[SourceCodeDepExtractor] Attempt {}/{} failed: {}", 
                         attempt, maxAttempts, e.getMessage());
@@ -236,7 +205,11 @@ public class SourceCodeDependencyExtractor {
 
         // All attempts failed
         log.error("[SourceCodeDepExtractor] All {} clone attempts failed for {}", maxAttempts, repoUrl);
-        throw lastException;
+        if (lastException != null) {
+            throw lastException;
+        } else {
+            throw new IOException("Clone failed after " + maxAttempts + " attempts with unknown error");
+        }
     }
 
     /**
