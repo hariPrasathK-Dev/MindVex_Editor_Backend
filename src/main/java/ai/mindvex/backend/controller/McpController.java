@@ -265,28 +265,41 @@ public class McpController {
                 "1. Return ONLY valid JSON.\n" +
                 "2. Do NOT include explanations, markdown, or comments.\n" +
                 "3. Follow the schema exactly.\n" +
-                "4. Ensure node IDs are unique.\n" +
-                "5. Keep the structure clean and logical.\n" +
-                "6. The diagram must represent a realistic software architecture or flow based on the repo context.\n\n"
-                +
+                "4. The diagram must be structured and readable.\n" +
+                "5. Nodes must be organized into logical layers.\n" +
+                "6. Avoid random graph structures or tangled networks.\n" +
+                "7. Group related components together.\n" +
+                "8. Limit edges only to meaningful relationships.\n" +
+                "9. Do not connect every node to every node.\n" +
+                "10. Prefer hierarchical or directional flows.\n\n" +
+                "DIAGRAM STYLE RULES:\n" +
+                "Use layered architecture ordering when possible:\n" +
+                "Layer 1: User Interface / Controllers\n" +
+                "Layer 2: Services / Business Logic\n" +
+                "Layer 3: Data Access / Repositories\n" +
+                "Layer 4: Database / External Systems\n" +
+                "Edges must generally flow from top to bottom.\n" +
+                "Example flow: Frontend → Controller → Service → Repository → Database\n\n" +
                 "SCHEMA:\n" +
                 "{\n" +
                 "  \"nodes\": [\n" +
                 "    {\n" +
                 "      \"data\": {\n" +
-                "        \"id\": \"string\",\n" +
-                "        \"label\": \"string\",\n" +
-                "        \"type\": \"ui | service | api | database | module | function | external\"\n" +
+                "        \"id\": \"unique_id\",\n" +
+                "        \"label\": \"Readable Name\",\n" +
+                "        \"type\": \"ui | controller | service | repository | database | module | utility | external\",\n"
+                +
+                "        \"layer\": 1\n" +
                 "      }\n" +
                 "    }\n" +
                 "  ],\n" +
                 "  \"edges\": [\n" +
                 "    {\n" +
                 "      \"data\": {\n" +
-                "        \"id\": \"string\",\n" +
+                "        \"id\": \"edge_id\",\n" +
                 "        \"source\": \"node_id\",\n" +
                 "        \"target\": \"node_id\",\n" +
-                "        \"relation\": \"calls | reads | writes | depends | request | response\"\n" +
+                "        \"relation\": \"calls | reads | writes | depends | imports | handles | queries\"\n" +
                 "      }\n" +
                 "    }\n" +
                 "  ]\n" +
