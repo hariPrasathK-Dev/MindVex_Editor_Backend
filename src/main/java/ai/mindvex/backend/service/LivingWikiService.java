@@ -81,6 +81,8 @@ public class LivingWikiService {
         // ─── Semantic Context Retrieval ─────────────────────────────────────
         // Use embeddings to gather rich semantic context for documentation
         StringBuilder semanticContext = new StringBuilder();
+        int apiChunksCount = 0; // Track API-related chunks for conditional generation
+        
         if (embeddingCount > 0) {
             try {
                 log.info("[LivingWiki] Retrieving semantic context via embeddings (count={})", embeddingCount);
@@ -163,7 +165,7 @@ public class LivingWikiService {
                         "authentication login register auth route"
                 };
 
-                int apiChunksCount = 0;
+                // apiChunksCount already declared at method scope
                 int maxApiChunks = 40; // SIGNIFICANTLY HIGHER for API documentation
                 int maxRouteChunkLength = 1500; // DON'T truncate route definitions aggressively
 
@@ -358,21 +360,27 @@ public class LivingWikiService {
                 log.info("[LivingWiki] ✓ adr.md generated ({} chars)", adr.length());
             }
 
-            // File 3: api-reference.md (API documentation)
-            log.info("[LivingWiki] [3/3] Generating api-reference.md...");
-            String apiContext = buildApiContext(context.toString(), semanticContext.toString());
-            String apiRef = generateSingleFile("api-reference.md", apiContext, provider);
-            if (apiRef != null && !apiRef.isBlank()) {
-                documentationFiles.put("api-reference.md", apiRef);
-                log.info("[LivingWiki] ✓ api-reference.md generated ({} chars)", apiRef.length());
+            // File 3: api-reference.md (API documentation) - ONLY if API content was found
+            boolean hasApiContent = apiChunksCount > 0;
+            if (hasApiContent) {
+                log.info("[LivingWiki] [3/3] Generating api-reference.md ({} API chunks found)...", apiChunksCount);
+                String apiContext = buildApiContext(context.toString(), semanticContext.toString());
+                String apiRef = generateSingleFile("api-reference.md", apiContext, provider);
+                if (apiRef != null && !apiRef.isBlank()) {
+                    documentationFiles.put("api-reference.md", apiRef);
+                    log.info("[LivingWiki] ✓ api-reference.md generated ({} chars)", apiRef.length());
+                }
+            } else {
+                log.info("[LivingWiki] [3/3] Skipping api-reference.md (no API content detected)");
             }
 
-            if (documentationFiles.size() >= 2) {
+            // Valid to have 1-3 files depending on project type
+            if (documentationFiles.size() >= 1) {
                 log.info("[LivingWiki] Successfully generated {} documentation files", documentationFiles.size());
                 return documentationFiles;
             }
 
-            log.warn("[LivingWiki] Only generated {} files, using fallback", documentationFiles.size());
+            log.warn("[LivingWiki] No files generated, using fallback");
 
         } catch (Exception e) {
             log.error("[LivingWiki] Failed to generate documentation files: {}", e.getMessage(), e);
@@ -526,8 +534,10 @@ public class LivingWikiService {
             List<String> chunks = splitIntoCodeChunks(apiChunksSection);
             log.info("[LivingWiki] Found {} API code chunks to process", chunks.size());
 
+            // Guard: Return null immediately if no chunks found
             if (chunks.isEmpty()) {
-                return generateSingleFileDirect("api-reference.md", apiContext, provider);
+                log.warn("[LivingWiki] No API code chunks found after splitting, skipping API reference generation");
+                return null;
             }
 
             // ═══════════════════════════════════════════════════════════════════════════
@@ -536,14 +546,16 @@ public class LivingWikiService {
 
             log.info("[LivingWiki] [Stage 1] Extracting and cleaning endpoints from {} chunks", chunks.size());
 
-            // Calculate batch size for extraction (reduced to 5KB to stay under rate limits)
+            // Calculate batch size for extraction (reduced to 5KB to stay under rate
+            // limits)
             // 5000 chars ≈ 1250 tokens input + 1500 tokens output = ~2750 total
             // This ensures we stay well under the 6000 TPM limit even with recent usage
             int maxCharsPerBatch = 5000;
             List<List<String>> batches = createBatches(chunks, maxCharsPerBatch);
             log.info("[LivingWiki] Created {} batches for endpoint extraction", batches.size());
 
-            // Wait 60s before starting to ensure sliding window is clear from previous API calls
+            // Wait 60s before starting to ensure sliding window is clear from previous API
+            // calls
             if (batches.size() > 0) {
                 log.info("[LivingWiki] Waiting 60s to clear rate limit sliding window before starting...");
                 try {
@@ -590,9 +602,10 @@ public class LivingWikiService {
             List<ExtractedEndpoint> cleanedEndpoints = dataCleaningService.cleanAndDeduplicateEndpoints(allEndpoints);
             log.info("[LivingWiki] [Stage 1] Cleaned to {} unique endpoints", cleanedEndpoints.size());
 
+            // Guard: Return null if no endpoints found after cleaning
             if (cleanedEndpoints.isEmpty()) {
-                log.warn("[LivingWiki] No clean endpoints found, falling back to direct generation");
-                return generateSingleFileDirect("api-reference.md", apiContext, provider);
+                log.warn("[LivingWiki] No clean endpoints found after extraction and deduplication, skipping API reference");
+                return null;
             }
 
             // ═══════════════════════════════════════════════════════════════════════════
