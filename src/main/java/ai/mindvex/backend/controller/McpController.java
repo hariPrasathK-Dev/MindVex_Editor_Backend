@@ -15,6 +15,9 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -187,6 +190,155 @@ public class McpController {
                 "module", modulePath,
                 "description", description,
                 "format", "markdown"));
+    }
+
+    // ─── Tool: Diagram Generation ───────────────────────────────────────────
+
+    @PostMapping("/tools/diagram/recommend")
+    public ResponseEntity<Map<String, Object>> recommendDiagrams(
+            @RequestParam String repoUrl,
+            @RequestBody Map<String, Object> body,
+            Authentication authentication) {
+
+        Long userId = extractUserId(authentication);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> provider = (Map<String, Object>) body.get("provider");
+
+        var deps = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
+        Set<String> allFiles = new HashSet<>();
+        deps.forEach(d -> {
+            allFiles.add(d.getSourceFile());
+            allFiles.add(d.getTargetFile());
+        });
+
+        String context = String.format("Repository: %s\nFiles: %d\nDependencies: %d\nModules: %s",
+                repoUrl, allFiles.size(), deps.size(),
+                allFiles.stream().limit(50).collect(Collectors.joining(", ")));
+
+        String prompt = "Analyze the following repository context and recommend 3-4 diagrams that would be most useful to generate from this list:\n"
+                +
+                "1. System Architecture Diagram\n2. Component Diagram\n3. Module Dependency Graph\n4. Function Call Graph\n"
+                +
+                "5. Sequence Diagram\n6. API Flow Diagram\n7. User Flow Diagram\n8. Data Flow Diagram\n9. Database ER Diagram\n10. Deployment Diagram\n\n"
+                +
+                "Repository Context:\n" + context + "\n\n" +
+                "Return ONLY a valid JSON array of strings containing the exact diagram names. Do not include markdown code blocks. Example: [\"System Architecture Diagram\", \"API Flow Diagram\"]";
+
+        try {
+            String jsonOutput = callAiSafely(prompt, provider, context);
+            // strip markdown formatting if any
+            jsonOutput = jsonOutput.replaceAll("```json", "").replaceAll("```", "").trim();
+            return ResponseEntity.ok(Map.of("recommended", jsonOutput));
+        } catch (Exception e) {
+            log.error("[McpDiagram] recommend failed: {}", e.getMessage());
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/tools/diagram/generate")
+    public ResponseEntity<Map<String, Object>> generateDiagram(
+            @RequestParam String repoUrl,
+            @RequestBody Map<String, Object> body,
+            Authentication authentication) {
+
+        Long userId = extractUserId(authentication);
+        String diagramType = (String) body.getOrDefault("diagramType", "System Architecture Diagram");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> provider = (Map<String, Object>) body.get("provider");
+
+        var deps = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
+        Set<String> allFiles = new HashSet<>();
+        deps.forEach(d -> {
+            allFiles.add(d.getSourceFile());
+            allFiles.add(d.getTargetFile());
+        });
+
+        String context = String.format("Repository: %s\nFiles: %d\nDependencies: %d\nModules: %s",
+                repoUrl, allFiles.size(), deps.size(),
+                allFiles.stream().limit(100).collect(Collectors.joining(", ")));
+
+        String prompt = "Your task is to generate structured graph data for visualizing software diagrams for this repository.\n\n"
+                +
+                "The output must represent nodes and edges of a system so it can be rendered in a graph visualization engine like Cytoscape.js.\n\n"
+                +
+                "IMPORTANT RULES:\n" +
+                "1. Return ONLY valid JSON.\n" +
+                "2. Do NOT include explanations, markdown, or comments.\n" +
+                "3. Follow the schema exactly.\n" +
+                "4. Ensure node IDs are unique.\n" +
+                "5. Keep the structure clean and logical.\n" +
+                "6. The diagram must represent a realistic software architecture or flow based on the repo context.\n\n"
+                +
+                "SCHEMA:\n" +
+                "{\n" +
+                "  \"nodes\": [\n" +
+                "    {\n" +
+                "      \"data\": {\n" +
+                "        \"id\": \"string\",\n" +
+                "        \"label\": \"string\",\n" +
+                "        \"type\": \"ui | service | api | database | module | function | external\"\n" +
+                "      }\n" +
+                "    }\n" +
+                "  ],\n" +
+                "  \"edges\": [\n" +
+                "    {\n" +
+                "      \"data\": {\n" +
+                "        \"id\": \"string\",\n" +
+                "        \"source\": \"node_id\",\n" +
+                "        \"target\": \"node_id\",\n" +
+                "        \"relation\": \"calls | reads | writes | depends | request | response\"\n" +
+                "      }\n" +
+                "    }\n" +
+                "  ]\n" +
+                "}\n\n" +
+                "DIAGRAM TYPE: " + diagramType + "\n\n" +
+                "SYSTEM DESCRIPTION (Context):\n" + context + "\n\n" +
+                "Generate the graph now. Return ONLY JSON. Do not include markdown formatting like ```json.";
+
+        try {
+            String jsonOutput = callAiSafely(prompt, provider, context);
+            jsonOutput = jsonOutput.replaceAll("```json", "").replaceAll("```", "").trim();
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> parsed = mapper.readValue(jsonOutput, new TypeReference<Map<String, Object>>() {
+            });
+            return ResponseEntity.ok(Map.of("graph", parsed));
+        } catch (Exception e) {
+            log.error("[McpDiagram] generate failed: {}", e.getMessage());
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    private String callAiSafely(String prompt, Map<String, Object> provider, String context) {
+        if (provider != null) {
+            String providerName = (String) provider.get("name");
+            String model = (String) provider.get("model");
+            String apiKey = (String) provider.get("apiKey");
+            String baseUrl = (String) provider.get("baseUrl");
+
+            try {
+                if ("Ollama".equals(providerName)) {
+                    List<Map<String, String>> history = new ArrayList<>();
+                    return (String) callOllama(prompt, history, model, baseUrl, context).getBody().get("reply");
+                } else if ("LMStudio".equals(providerName)) {
+                    return (String) callOpenAILike(providerName, prompt, new ArrayList<>(), model,
+                            baseUrl != null ? baseUrl : "http://localhost:1234", apiKey, context).getBody()
+                            .get("reply");
+                } else if ("Anthropic".equals(providerName)) {
+                    return (String) callAnthropic(prompt, new ArrayList<>(), model, apiKey, context).getBody()
+                            .get("reply");
+                } else if ("Groq".equals(providerName) || "OpenAI".equals(providerName) || "XAI".equals(providerName)) {
+                    return (String) callOpenAILike(providerName, prompt, new ArrayList<>(), model, apiKey, baseUrl,
+                            context).getBody().get("reply");
+                } else if ("Google".equals(providerName)) {
+                    return (String) callGemini(prompt, new ArrayList<>(), model, apiKey, context).getBody()
+                            .get("reply");
+                }
+            } catch (Exception e) {
+                log.error("[callAiSafely] {} failed: {}", providerName, e.getMessage());
+            }
+        }
+        return (String) callGemini(prompt, new ArrayList<>(), "gemini-2.0-flash", geminiApiKey, context).getBody()
+                .get("reply");
     }
 
     // ─── Tool: AI Chat ──────────────────────────────────────────────────────
