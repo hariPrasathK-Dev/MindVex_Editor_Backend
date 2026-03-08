@@ -23,6 +23,7 @@
         <jjwt.version>0.12.3</jjwt.version>
         <springdoc.version>2.3.0</springdoc.version>
         <protobuf.version>4.29.3</protobuf.version>
+        <lombok.version>1.18.36</lombok.version>
     </properties>
     
     <dependencies>

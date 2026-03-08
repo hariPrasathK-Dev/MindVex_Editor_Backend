@@ -34,7 +34,6 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/mcp")
-@RequiredArgsConstructor
 @Slf4j
 public class McpController {
 
@@ -46,7 +45,20 @@ public class McpController {
     @Value("${gemini.api-key:#{null}}")
     private String geminiApiKey;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
+
+    public McpController(EmbeddingIngestionService embeddingService, LivingWikiService wikiService,
+                         FileDependencyRepository depRepo, UserRepository userRepository) {
+        this.embeddingService = embeddingService;
+        this.wikiService = wikiService;
+        this.depRepo = depRepo;
+        this.userRepository = userRepository;
+
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(10000);
+        factory.setReadTimeout(60000);
+        this.restTemplate = new RestTemplate(factory);
+    }
 
     // ─── Resource Discovery ─────────────────────────────────────────────────
 
@@ -367,6 +379,8 @@ public class McpController {
         String message = (String) body.getOrDefault("message", "");
         List<Map<String, String>> history = (List<Map<String, String>>) body.getOrDefault("history", List.of());
         Map<String, Object> provider = (Map<String, Object>) body.get("provider");
+        log.info("[McpChat] Request received. Repo: {}, Message length: {}, Provider: {}", 
+                repoUrl, message != null ? message.length() : 0, provider != null ? provider.get("name") : "Default");
 
         // ─── Context Gathering ──────────────────────────────────────────────────
 
@@ -414,14 +428,18 @@ public class McpController {
         }
 
         // Default to Gemini if no provider specified or recognized
+        log.info("[McpChat] No specific provider matched. Defaulting to Gemini.");
         return callGemini(message, history, "gemini-2.0-flash", geminiApiKey, codebaseContext);
     }
 
     private ResponseEntity<Map<String, Object>> callGemini(String message, List<Map<String, String>> history,
             String model, String apiKey, String context) {
         if (apiKey == null || apiKey.isEmpty()) {
-            return ResponseEntity.ok(Map.of("reply", "⚠️ Google API key not configured.", "model", "error"));
+            log.warn("[Gemini] API key missing. Returning warning.");
+            return ResponseEntity.ok(Map.of("reply", "⚠️ Google API key not configured. Please add it to your settings.", "model", "error"));
         }
+
+        log.info("[Gemini] Calling API... Model: {}", model);
 
         List<Map<String, Object>> contents = new ArrayList<>();
         contents.add(Map.of("role", "user", "parts", List.of(Map.of("text",
@@ -439,11 +457,18 @@ public class McpController {
                 + (model != null ? model : "gemini-2.0-flash") + ":generateContent?key=" + apiKey;
 
         try {
+            log.info("[Gemini] Sending request to: {}", url);
             ResponseEntity<Map> response = restTemplate.postForEntity(url, Map.of("contents", contents), Map.class);
+            log.info("[Gemini] Response received: {}", response.getStatusCode());
             var candidates = (List<Map<String, Object>>) response.getBody().get("candidates");
+            if (candidates == null || candidates.isEmpty()) {
+                log.warn("[Gemini] No candidates in response.");
+                return ResponseEntity.ok(Map.of("reply", "⚠️ Gemini returned no response candidates.", "model", model));
+            }
             var content = (Map<String, Object>) candidates.get(0).get("content");
             var parts = (List<Map<String, Object>>) content.get("parts");
             String reply = (String) parts.get(0).get("text");
+            log.info("[Gemini] Extraction successful. Reply length: {}", reply != null ? reply.length() : 0);
             return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
             throw new RuntimeException("Gemini call failed: " + e.getMessage());
@@ -466,11 +491,15 @@ public class McpController {
                 "messages", messages,
                 "stream", false);
 
+        log.info("[Ollama] Calling API at: {} with model: {}", url, model);
+
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
+            log.info("[Ollama] Response received: {}", response.getStatusCode());
             String reply = (String) ((Map<String, Object>) response.getBody().get("message")).get("content");
             return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
+            log.error("[Ollama] Call failed: {}", e.getMessage());
             throw new RuntimeException("Ollama call failed: " + e.getMessage());
         }
     }
@@ -478,9 +507,11 @@ public class McpController {
     private ResponseEntity<Map<String, Object>> callAnthropic(String message, List<Map<String, String>> history,
             String model, String apiKey, String context) {
         if (apiKey == null || apiKey.isEmpty()) {
+            log.warn("[Anthropic] API key missing.");
             return ResponseEntity.ok(Map.of("reply", "⚠️ Anthropic API key not configured.", "model", "error"));
         }
 
+        log.info("[Anthropic] Calling API... Model: {}", model);
         String url = "https://api.anthropic.com/v1/messages";
 
         List<Map<String, String>> messages = new ArrayList<>();
@@ -501,12 +532,16 @@ public class McpController {
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         try {
+            log.info("[Anthropic] Sending request to: {}", url);
             ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST,
                     new HttpEntity<>(request, headers), Map.class);
+            log.info("[Anthropic] Response received: {}", response.getStatusCode());
             String reply = (String) ((Map<String, Object>) ((List) response.getBody().get("content")).get(0))
                     .get("text");
+            log.info("[Anthropic] Extraction successful. Reply length: {}", reply != null ? reply.length() : 0);
             return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
+            log.error("[Anthropic] Call failed: {}", e.getMessage());
             throw new RuntimeException("Anthropic call failed: " + e.getMessage());
         }
     }
@@ -514,8 +549,11 @@ public class McpController {
     private ResponseEntity<Map<String, Object>> callOpenAILike(String provider, String message,
             List<Map<String, String>> history, String model, String apiKey, String baseUrl, String context) {
         if (apiKey == null || apiKey.isEmpty()) {
+            log.warn("[OpenAILike] API key missing for provider: {}", provider);
             return ResponseEntity.ok(Map.of("reply", "⚠️ " + provider + " API key not configured.", "model", "error"));
         }
+
+        log.info("[OpenAILike] Calling provider: {} Model: {}", provider, model);
 
         String url;
         if ("Groq".equals(provider))
@@ -542,13 +580,17 @@ public class McpController {
         headers.setBearerAuth(apiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
 
+        log.info("[OpenAILike] Sending request to: {}", url);
         try {
             ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST,
                     new HttpEntity<>(request, headers), Map.class);
+            log.info("[OpenAILike] Response received: {}", response.getStatusCode());
             String reply = (String) ((Map<String, Object>) ((Map<String, Object>) ((List) response.getBody()
                     .get("choices")).get(0)).get("message")).get("content");
+            log.info("[OpenAILike] Extraction successful. Reply length: {}", reply != null ? reply.length() : 0);
             return ResponseEntity.ok(Map.of("reply", reply, "model", model));
         } catch (Exception e) {
+            log.error("[OpenAILike] {} call failed: {}", provider, e.getMessage());
             throw new RuntimeException(provider + " call failed: " + e.getMessage());
         }
     }

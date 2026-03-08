@@ -61,6 +61,7 @@ public class SecurityConfig {
                                                                 "/api/auth/**",
                                                                 "/api/health",
                                                                 "/api/git-proxy/**",
+                                                                "/api/configured-providers",
                                                                 "/swagger-ui/**",
                                                                 "/api-docs/**",
                                                                 "/actuator/**")
