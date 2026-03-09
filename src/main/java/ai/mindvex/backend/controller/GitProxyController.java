@@ -206,8 +206,23 @@ public class GitProxyController {
           .headers(responseHeaders)
           .body(response.getBody());
 
+    } catch (org.springframework.web.client.HttpStatusCodeException e) {
+      log.error("[GitProxy] HTTP Error from target {}: {} - {}", targetUrl, e.getStatusCode(),
+          e.getResponseBodyAsString());
+
+      String errorDetail = e.getMessage();
+      if ((e.getStatusCode() == HttpStatus.NOT_FOUND || e.getStatusCode() == HttpStatus.FORBIDDEN)
+          && method != HttpMethod.GET && targetUrl.contains("api.github.com")) {
+        errorDetail += ". This typically means you do not have write permissions for this repository. " +
+            "If this is a repository owned by someone else (like a friend), you must be added as a collaborator with write access.";
+      }
+
+      return ResponseEntity
+          .status(e.getStatusCode())
+          .body(("Git proxy error: " + errorDetail).getBytes());
+
     } catch (Exception e) {
-      log.error("[GitProxy] Error proxying request to {}: {}", targetUrl, e.getMessage());
+      log.error("[GitProxy] Unexpected error proxying request to {}: {}", targetUrl, e.getMessage());
 
       return ResponseEntity
           .status(HttpStatus.BAD_GATEWAY)
