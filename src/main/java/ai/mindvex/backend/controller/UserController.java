@@ -70,4 +70,25 @@ public class UserController {
 
         return ResponseEntity.noContent().build();
     }
+
+    @PostMapping("/me/github-token")
+    @Operation(summary = "Set GitHub Personal Access Token", description = "Manually sets a GitHub PAT for the user")
+    public ResponseEntity<Void> setGithubToken(
+            @RequestBody Map<String, String> body,
+            Authentication authentication) {
+
+        String token = body.get("token");
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        user.setGithubAccessToken(token);
+        userRepository.save(user);
+
+        return ResponseEntity.ok().build();
+    }
 }
