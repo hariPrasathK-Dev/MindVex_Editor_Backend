@@ -89,7 +89,8 @@ public class LivingWikiService {
         }
 
         // ─── PHASE 1: EXISTING README EXTRACTION ─────────────────────────────────────
-        // Extract existing README.md from repository (using vector embeddings to reconstruct full content)
+        // Extract existing README.md from repository (using vector embeddings to
+        // reconstruct full content)
         boolean readmeExists = allFiles.stream()
                 .anyMatch(f -> f.toLowerCase().endsWith("readme.md") || f.toLowerCase().equals("readme.md"));
         String existingReadmeContent = "";
@@ -100,7 +101,8 @@ public class LivingWikiService {
                 existingReadmeContent = extractExistingReadme(userId, repoUrl);
 
                 if (!existingReadmeContent.isBlank()) {
-                    log.info("[LivingWiki] Successfully extracted existing README.md ({} chars)", existingReadmeContent.length());
+                    log.info("[LivingWiki] Successfully extracted existing README.md ({} chars)",
+                            existingReadmeContent.length());
                 } else {
                     log.warn("[LivingWiki] README.md detected but content could not be retrieved");
                     readmeExists = false;
@@ -444,7 +446,8 @@ public class LivingWikiService {
 
     /**
      * PHASE 1: Extract existing README.md content from vector embeddings.
-     * Reconstructs the full README by fetching all chunks belonging to README.md file.
+     * Reconstructs the full README by fetching all chunks belonging to README.md
+     * file.
      * 
      * @param userId  User ID
      * @param repoUrl Repository URL
@@ -454,19 +457,19 @@ public class LivingWikiService {
         try {
             // Query embeddings repository directly for all README.md chunks
             List<VectorEmbedding> allEmbeddings = embeddingRepo.findByUserIdAndRepoUrl(userId, repoUrl);
-            
+
             // Filter for README.md file (case-insensitive)
             List<VectorEmbedding> readmeChunks = allEmbeddings.stream()
-                .filter(emb -> emb.getFilePath() != null && 
-                               emb.getFilePath().toLowerCase().endsWith("readme.md"))
-                .sorted(Comparator.comparingInt(VectorEmbedding::getChunkIndex))
-                .collect(Collectors.toList());
-            
+                    .filter(emb -> emb.getFilePath() != null &&
+                            emb.getFilePath().toLowerCase().endsWith("readme.md"))
+                    .sorted(Comparator.comparingInt(VectorEmbedding::getChunkIndex))
+                    .collect(Collectors.toList());
+
             if (readmeChunks.isEmpty()) {
                 log.warn("[LivingWiki] No README.md chunks found in embeddings");
                 return "";
             }
-            
+
             // Reconstruct full README by concatenating chunks in order
             StringBuilder fullReadme = new StringBuilder();
             for (VectorEmbedding chunk : readmeChunks) {
@@ -476,10 +479,10 @@ public class LivingWikiService {
                     fullReadme.append("\n");
                 }
             }
-            
+
             log.info("[LivingWiki] Reconstructed README.md from {} chunks", readmeChunks.size());
             return fullReadme.toString().trim();
-            
+
         } catch (Exception e) {
             log.error("[LivingWiki] Error extracting existing README: {}", e.getMessage(), e);
             return "";
@@ -488,7 +491,8 @@ public class LivingWikiService {
 
     /**
      * Build focused context for README.md generation using MAP-REDUCE approach.
-     * PHASE 2 & 3: Injects existing README with XML tags and Preserve or Update instructions.
+     * PHASE 2 & 3: Injects existing README with XML tags and Preserve or Update
+     * instructions.
      */
     private String buildReadmeContext(String structureContext, String semanticContext,
             boolean readmeExists, String existingReadmeContent) {
@@ -540,36 +544,37 @@ public class LivingWikiService {
 
         // PHASE 3: Add "Preserve or Update" instructions at the end
         readmeCtx.append("\n\n═══ INSTRUCTIONS ═══\n");
-        readmeCtx.append("""
-                You are a Documentation AI. You have been provided with an <ActualProjectStructure>, code context snippets, and an <ExistingReadme>.
-                
-                Follow these rules STRICTLY:
-                
-                1. **EVALUATE:** Compare the <ExistingReadme> against the <ActualProjectStructure> and the provided code context.
-                   - Check if the existing README mentions technologies, frameworks, or folders that don't exist in the current codebase.
-                   - Check if the existing README is missing important new folders or files from <ActualProjectStructure>.
-                   - Check if the tech stack described matches the actual imports and code patterns in the code context.
-                
-                2. **PRESERVE:** If the <ExistingReadme> is accurate, has no contradictions with the current codebase, and covers the primary files:
-                   - YOU MUST RETURN THE EXACT <ExistingReadme> CONTENT.
-                   - Do not change a single word, do not change the formatting, and do not add unnecessary fluff.
-                   - The existing documentation was written by humans and should be respected unless it's factually wrong.
-                
-                3. **UPDATE:** If the <ExistingReadme> contains contradictions OR is missing critical information:
-                   - UPDATE it by correcting inaccuracies and adding missing information.
-                   - PRESERVE the original author's writing style and structure as much as possible.
-                   - Only modify sections that are factually incorrect or incomplete.
-                   - Add new sections only if they're essential and missing.
-                   - Maintain the same tone, heading levels, and organization from the original.
-                
-                4. **GENERATE:** If <ExistingReadme> is 'NONE':
-                   - Generate a concise, accurate README from scratch.
-                   - Base it STRICTLY on the provided <ActualProjectStructure> and code context.
-                   - Do not hallucinate technologies, frameworks, or features not present in the code.
-                   - Keep it factual and brief.
-                
-                CRITICAL: Your primary obligation is to PRESERVE existing documentation unless there are factual contradictions. Do not "improve" or "enhance" accurate documentation.
-                """);
+        readmeCtx
+                .append("""
+                        You are a Documentation AI. You have been provided with an <ActualProjectStructure>, code context snippets, and an <ExistingReadme>.
+
+                        Follow these rules STRICTLY:
+
+                        1. **EVALUATE:** Compare the <ExistingReadme> against the <ActualProjectStructure> and the provided code context.
+                           - Check if the existing README mentions technologies, frameworks, or folders that don't exist in the current codebase.
+                           - Check if the existing README is missing important new folders or files from <ActualProjectStructure>.
+                           - Check if the tech stack described matches the actual imports and code patterns in the code context.
+
+                        2. **PRESERVE:** If the <ExistingReadme> is accurate, has no contradictions with the current codebase, and covers the primary files:
+                           - YOU MUST RETURN THE EXACT <ExistingReadme> CONTENT.
+                           - Do not change a single word, do not change the formatting, and do not add unnecessary fluff.
+                           - The existing documentation was written by humans and should be respected unless it's factually wrong.
+
+                        3. **UPDATE:** If the <ExistingReadme> contains contradictions OR is missing critical information:
+                           - UPDATE it by correcting inaccuracies and adding missing information.
+                           - PRESERVE the original author's writing style and structure as much as possible.
+                           - Only modify sections that are factually incorrect or incomplete.
+                           - Add new sections only if they're essential and missing.
+                           - Maintain the same tone, heading levels, and organization from the original.
+
+                        4. **GENERATE:** If <ExistingReadme> is 'NONE':
+                           - Generate a concise, accurate README from scratch.
+                           - Base it STRICTLY on the provided <ActualProjectStructure> and code context.
+                           - Do not hallucinate technologies, frameworks, or features not present in the code.
+                           - Keep it factual and brief.
+
+                        CRITICAL: Your primary obligation is to PRESERVE existing documentation unless there are factual contradictions. Do not "improve" or "enhance" accurate documentation.
+                        """);
 
         return readmeCtx.toString();
     }
@@ -2318,12 +2323,12 @@ public class LivingWikiService {
             // This prompt is simplified since detailed instructions are in context
             return """
                     Generate or update the README.md based on the provided context.
-                    
+
                     Follow the instructions in the context carefully, especially regarding <ExistingReadme> and <ActualProjectStructure>.
-                    
+
                     **Context:**
                     %s
-                    
+
                     Output ONLY the README.md markdown content (no delimiters, no wrappers, no explanations).
                     """
                     .formatted(focusedContext);

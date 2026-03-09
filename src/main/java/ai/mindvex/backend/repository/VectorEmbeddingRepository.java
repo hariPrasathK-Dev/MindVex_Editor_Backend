@@ -34,6 +34,12 @@ public interface VectorEmbeddingRepository extends JpaRepository<VectorEmbedding
     );
 
     /**
+     * Find all embeddings for a user+repo.
+     */
+    @Query("SELECT v FROM VectorEmbedding v WHERE v.userId = :userId AND v.repoUrl = :repoUrl")
+    List<VectorEmbedding> findByUserIdAndRepoUrl(@Param("userId") Long userId, @Param("repoUrl") String repoUrl);
+
+    /**
      * Delete all embeddings for a user+repo (for re-indexing).
      */
     @Modifying
