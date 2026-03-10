@@ -5,7 +5,6 @@ import ai.mindvex.backend.security.CustomOAuth2UserService;
 import ai.mindvex.backend.security.HttpCookieOAuth2AuthorizationRequestRepository;
 import ai.mindvex.backend.security.OAuth2AuthenticationSuccessHandler;
 import ai.mindvex.backend.security.OAuth2AuthenticationFailureHandler;
-import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -61,6 +60,7 @@ public class SecurityConfig {
                                                                 "/api/auth/**",
                                                                 "/api/health",
                                                                 "/api/git-proxy/**",
+                                                                "/api/mcp/reasoning/**",
                                                                 "/api/configured-providers",
                                                                 "/swagger-ui/**",
                                                                 "/api-docs/**",

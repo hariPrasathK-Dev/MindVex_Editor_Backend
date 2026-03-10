@@ -34,7 +34,13 @@ public class CodeReasoningEngine {
         long startTime = System.currentTimeMillis();
 
         // Retrieve full dependency graph to feed into the AI context
-        List<FileDependency> dependencies = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
+        List<FileDependency> dependencies;
+        try {
+            dependencies = depRepo.findByUserIdAndRepoUrl(userId, repoUrl);
+        } catch (Exception ex) {
+            log.warn("[CodeReasoning] Could not load dependency graph for repo {}: {}", repoUrl, ex.getMessage());
+            dependencies = Collections.emptyList();
+        }
         String dependencyContext = serializeDependenciesForAI(dependencies);
 
         // PHASE 3 ENHANCEMENT: Fetch actual code from top 5 most central files
@@ -45,10 +51,11 @@ public class CodeReasoningEngine {
         log.info("[CodeReasoning] Enriched context: {} dependencies, {} central files with code",
                 dependencies.size(), centralFiles.size());
 
-        String provider = (String) aiProviderConfig.getOrDefault("name", "Gemini");
-        String model = (String) aiProviderConfig.get("model");
-        String apiKey = (String) aiProviderConfig.get("apiKey");
-        String baseUrl = (String) aiProviderConfig.get("baseUrl");
+        Map<String, Object> providerConfig = aiProviderConfig != null ? aiProviderConfig : Map.of("name", "Gemini");
+        String provider = (String) providerConfig.getOrDefault("name", "Gemini");
+        String model = (String) providerConfig.get("model");
+        String apiKey = (String) providerConfig.get("apiKey");
+        String baseUrl = (String) providerConfig.get("baseUrl");
 
         String massiveSystemPrompt = buildEnterpriseArchitectPrompt(dependencyContext, codeContext);
 
@@ -64,7 +71,12 @@ public class CodeReasoningEngine {
             return result;
         } catch (Exception e) {
             log.error("Failed to parse reasoning brain output. Falling back to mocked DTO. Error: {}", e.getMessage());
-            return generateFallbackResult(repoUrl); // Graceful degradation for malformed JSON
+            ReasoningResultDto fallback = generateFallbackResult(repoUrl); // Graceful degradation for malformed JSON
+            fallback.setAnalysisDurationMs(System.currentTimeMillis() - startTime);
+            fallback.setAnalysisTimestamp(Instant.now().toString());
+            fallback.setFilesScanned(new HashSet<>(
+                    dependencies.stream().map(FileDependency::getSourceFile).collect(Collectors.toList())).size());
+            return fallback;
         }
     }
 
@@ -115,6 +127,9 @@ public class CodeReasoningEngine {
     }
 
     private String cleanResponse(String raw) {
+        if (raw == null) {
+            return "{}";
+        }
         raw = raw.trim();
         if (raw.startsWith("```json"))
             raw = raw.substring(7);
