@@ -6,7 +6,6 @@ import ai.mindvex.backend.repository.FileDependencyRepository;
 import ai.mindvex.backend.repository.UserRepository;
 import ai.mindvex.backend.service.EmbeddingIngestionService;
 import ai.mindvex.backend.service.LivingWikiService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
