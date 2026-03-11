@@ -32,4 +32,31 @@ public class AuthController {
         AuthResponse response = userService.login(request);
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Request password reset - sends email with reset token
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<MessageResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        MessageResponse response = userService.requestPasswordReset(request);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Verify password reset token
+     */
+    @GetMapping("/verify-reset-token")
+    public ResponseEntity<MessageResponse> verifyResetToken(@RequestParam String token) {
+        MessageResponse response = userService.verifyResetToken(token);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Reset password using token
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<MessageResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        MessageResponse response = userService.resetPassword(request);
+        return ResponseEntity.ok(response);
+    }
 }
